@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { EmptyState, ErrorBanner, Field, Loading, errorMessage } from "../components/common";
 import { projectStateLabel } from "../labels";
-import { currentWeek } from "../week";
+import { currentWeek, shiftWeek } from "../week";
 import type { Person, Project, Workbench, WorkbenchProject } from "../types";
 
 /** 待处理事项的类别标签。顺序与后端一致：异常在前，待补数据在后。 */
@@ -16,18 +16,14 @@ export const TODO_KIND_LABEL: Record<string, string> = {
   review: "待核对",
 };
 
-function shiftWeek(week: string, delta: number): string {
-  const d = new Date(`${week}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + delta * 7);
-  return d.toISOString().slice(0, 10);
-}
-
 function ProjectCard({
   project,
+  week,
   expanded,
   onToggle,
 }: {
   project: WorkbenchProject;
+  week: string;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -38,6 +34,9 @@ function ProjectCard({
         {project.priority ? <span className="tag">{project.priority}</span> : null}
         <span className="tag">{projectStateLabel(project.state)}</span>
         {project.on_hold ? <span className="tag tag-warn">已暂停</span> : null}
+        <a className="link" href={`/projects/${project.id}?week=${week}`}>
+          查看项目
+        </a>
       </header>
       <p className="muted">
         当前重点：{project.current_focus_name ?? "未设置"}；本周投入 {project.allocation_days} 人天
@@ -197,6 +196,7 @@ export default function WorkbenchPage() {
             <ProjectCard
               key={p.id}
               project={p}
+              week={week}
               expanded={expanded.includes(p.id)}
               onToggle={() => toggle(p.id)}
             />
@@ -213,6 +213,7 @@ export default function WorkbenchPage() {
             <ProjectCard
               key={p.id}
               project={p}
+              week={week}
               expanded={expanded.includes(p.id)}
               onToggle={() => toggle(p.id)}
             />
@@ -230,6 +231,9 @@ export default function WorkbenchPage() {
               <header className="card-head">
                 <h3>{person.name}</h3>
                 <span className="muted">{person.status_text}</span>
+                <a className="link" href={`/persons?week=${week}&person=${person.person_id}`}>
+                  查看人员
+                </a>
               </header>
               <p className="muted">
                 本周投入 {person.total_days} 人天
@@ -244,6 +248,12 @@ export default function WorkbenchPage() {
                       <span className="muted">（{projectStateLabel(c.project_state)}）</span>
                     ) : null}
                     <span className="muted">{c.days} 人天</span>
+                    {c.allocations.map((a) => (
+                      <span key={a.id} className="muted">
+                        {" "}
+                        分配#{a.id}
+                      </span>
+                    ))}
                   </li>
                 ))}
               </ul>

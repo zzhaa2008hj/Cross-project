@@ -23,3 +23,10 @@ export function weekKeyOf(date: string): string {
 export function currentWeek(): string {
   return weekKeyOf(todayInShanghai());
 }
+
+/** 周键加减若干周（delta 为正向后、为负向前）。 */
+export function shiftWeek(week: string, delta: number): string {
+  const d = new Date(`${week}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + delta * 7);
+  return d.toISOString().slice(0, 10);
+}
