@@ -7,6 +7,8 @@
 - 已完成/已取消节点只列受影响记录而不改动
 - 跨项目依赖首版不支持
 - 预览展示固定记录版本；提交时遇循环、版本已变、非法日期则整笔拒绝并刷新预览
+- 非法日期（开始日晚于承诺日）在**预览阶段即整笔拒绝**，与提交阶段同一守卫、同一文案，
+  保证「预览允许 ⇒ 提交允许、预览拒绝 ⇒ 提交拒绝」
 """
 from __future__ import annotations
 
@@ -106,6 +108,18 @@ def _shift(value: date | None, delta: int) -> date | None:
     return value + timedelta(days=delta)
 
 
+def _reject_inverted_dates(
+    milestone_id: int, name: str, new_start: date | None, new_commit: date | None
+) -> None:
+    """开始日晚于承诺日属于非法日期：预览与提交共用本守卫，整笔拒绝且不写半份历史。"""
+    if new_start and new_commit and new_start > new_commit:
+        raise RescheduleError(
+            400,
+            f"非法日期：节点「{name}」开始日晚于承诺日，整笔拒绝",
+            {"milestone_id": milestone_id},
+        )
+
+
 def _milestone_payload(ms: Milestone) -> dict:
     return {
         "id": ms.id,
@@ -161,6 +175,10 @@ def build_preview(
     changes: list[dict] = []
     affected_not_modified: list[dict] = []
 
+    # 预览阶段即校验目标节点的新日期顺序（IMP-1）：
+    # 预览拒绝 ⇒ 提交必然拒绝，避免「预览过、提交挂」。
+    _reject_inverted_dates(ms.id, ms.name, target_start, target_commit)
+
     def add_change(old_ms, new_start, new_commit, note=""):
         changes.append(
             {
@@ -214,6 +232,8 @@ def build_preview(
             note = "承诺日未变，平移量为 0 天"
         new_start = _shift(succ.start_date, delta)
         new_commit = _shift(succ.commit_date, delta)
+        # 联动后继同样受日期顺序约束：预览阶段即整笔拒绝，与提交阶段一致
+        _reject_inverted_dates(succ.id, succ.name, new_start, new_commit)
         if new_start is None:
             note = (note + "；" if note else "") + "开始日为空，保持为空"
         if new_commit is None:
@@ -384,18 +404,15 @@ def apply_preview(db: Session, preview_id: int, reason: str, mode: str) -> dict:
         # 联动：目标节点 + 传递后继
         changes = payload["changes"]
 
-    # 非法日期校验
+    # 非法日期校验（与预览阶段同一守卫、同一文案）
     for change in changes:
         new_start = date.fromisoformat(change["new_start_date"]) if change["new_start_date"] else None
         new_commit = (
             date.fromisoformat(change["new_commit_date"]) if change["new_commit_date"] else None
         )
-        if new_start and new_commit and new_start > new_commit:
-            raise RescheduleError(
-                400,
-                f"非法日期：节点「{change['name']}」开始日晚于承诺日，整笔拒绝",
-                {"milestone_id": change["milestone_id"]},
-            )
+        _reject_inverted_dates(
+            change["milestone_id"], change["name"], new_start, new_commit
+        )
 
     updated: list[dict] = []
     try:

@@ -1,3 +1,4 @@
+import json
 from datetime import date
 
 from sqlalchemy import inspect
@@ -138,6 +139,85 @@ def test_reschedule_api_preview_and_apply(client):
     assert {u["name"] for u in applied.json()["updated"]} == {"A", "B"}
     detail = client.get(f"/api/milestones/{b['id']}").json()
     assert detail["commit_date"] == "2026-11-22"
+
+
+def test_reschedule_api_rejects_start_after_commit(client, db):
+    """IMP-1：预览与提交两个端点都在开始日晚于承诺日时返回 4xx 与可读原因。"""
+    from app.models import ReschedulePreview
+
+    pid = client.post("/api/projects", json={"name": "非法日期项目"}).json()["id"]
+    a = client.post(
+        f"/api/projects/{pid}/milestones",
+        json={
+            "name": "A",
+            "start_date": "2026-11-02",
+            "commit_date": "2026-11-13",
+            "state": "进行中",
+        },
+    ).json()
+
+    # 预览端点：直接给出「开始日晚于承诺日」
+    preview = client.post(
+        "/api/reschedule/preview",
+        json={
+            "milestone_id": a["id"],
+            "new_commit_date": "2026-11-13",
+            "new_start_date": "2026-11-20",
+            "mode": "current",
+        },
+    )
+    assert preview.status_code == 400
+    assert "开始日晚于承诺日" in preview.json()["detail"]["message"]
+
+    # 提交端点：守卫上线前的历史预览同样被拒
+    payload = {
+        "milestone_id": a["id"],
+        "milestone_name": "A",
+        "project_id": pid,
+        "mode": "current",
+        "delta_days": 0,
+        "old_commit_date": "2026-11-13",
+        "new_commit_date": "2026-11-13",
+        "old_start_date": "2026-11-02",
+        "new_start_date": "2026-11-20",
+        "changes": [
+            {
+                "milestone_id": a["id"],
+                "name": "A",
+                "state": "进行中",
+                "old_start_date": "2026-11-02",
+                "old_commit_date": "2026-11-13",
+                "new_start_date": "2026-11-20",
+                "new_commit_date": "2026-11-13",
+                "note": "",
+            }
+        ],
+        "affected_not_modified": [],
+        "buffer": {},
+        "successor_count": 0,
+        "impact_ids": [a["id"]],
+    }
+    row = ReschedulePreview(
+        milestone_id=a["id"],
+        mode="current",
+        payload_json=json.dumps(payload, ensure_ascii=False),
+        versions_json=json.dumps({str(a["id"]): 1}),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    applied = client.post(
+        "/api/reschedule/apply",
+        json={"preview_id": row.id, "reason": "客户原因", "mode": "current"},
+    )
+    assert applied.status_code == 400
+    assert "开始日晚于承诺日" in applied.json()["detail"]["message"]
+
+    # 整笔拒绝：不写半份历史
+    detail = client.get(f"/api/milestones/{a['id']}").json()
+    assert detail["start_date"] == "2026-11-02"
+    assert detail["commit_date"] == "2026-11-13"
 
 
 def test_demo_seed_creates_diamond(client):
