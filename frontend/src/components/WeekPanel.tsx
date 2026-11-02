@@ -3,14 +3,31 @@ import { api } from "../api";
 import { EmptyState, ErrorBanner, Field, Loading, errorMessage } from "./common";
 import type { Allocation, Milestone, PersonWeek, Project } from "../types";
 
+/** 人天：非负、0.5 粒度。 */
+function isValidDays(days: number): boolean {
+  if (!Number.isFinite(days) || days < 0) return false;
+  return Math.abs(days * 2 - Math.round(days * 2)) <= 1e-9;
+}
+
 /** 人天：非负、0.5 粒度。非法输入在提交前拦下，保留用户已填内容。 */
 export function parseDays(value: string): number | null {
   const text = value.trim();
   if (text === "") return null;
   const days = Number(text);
-  if (!Number.isFinite(days) || days < 0) return null;
-  if (Math.abs(days * 2 - Math.round(days * 2)) > 1e-9) return null;
+  if (!isValidDays(days)) return null;
   return days;
+}
+
+/**
+ * 指定周容量输入：空值表示"显式未知"，非法值必须与空值区分开，
+ * 否则负数或非法步长会被当成未知提交，覆盖原有容量。
+ */
+export function parseCapacityDays(value: string): { ok: boolean; days: number | null } {
+  const text = value.trim();
+  if (text === "") return { ok: true, days: null };
+  const days = Number(text);
+  if (!isValidDays(days)) return { ok: false, days: null };
+  return { ok: true, days };
 }
 
 interface WeekPanelProps {
@@ -133,6 +150,15 @@ export default function WeekPanel({ personId, week, focusProjectId, personName }
     setMilestoneId("");
   }
 
+  async function saveCapacity() {
+    const parsed = parseCapacityDays(capacityInput);
+    if (!parsed.ok) {
+      setError("容量必须是非负的 0.5 粒度数字，留空表示显式未知");
+      return;
+    }
+    await run(() => api.setWeekCapacity(personId, week, parsed.days));
+  }
+
   async function saveRow(row: Allocation) {
     const value = parseDays(editDays[row.id] ?? String(row.days));
     if (value === null) {
@@ -185,11 +211,7 @@ export default function WeekPanel({ personId, week, focusProjectId, personName }
           <button
             type="button"
             disabled={busy}
-            onClick={() =>
-              void run(() =>
-                api.setWeekCapacity(personId, week, parseDays(capacityInput)),
-              )
-            }
+            onClick={() => void saveCapacity()}
           >
             保存指定周容量
           </button>
