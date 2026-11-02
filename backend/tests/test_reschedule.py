@@ -123,20 +123,129 @@ def test_cycle_is_rejected_whole(db):
 
 
 def test_invalid_date_is_rejected_whole(db):
-    """源节点开始日晚于承诺日，改期后仍非法 → 整笔拒绝且不写半份历史。"""
+    """源节点开始日晚于承诺日，改期后仍非法 → 预览阶段即整笔拒绝且不写半份历史。"""
     project = make_project(db, "非法日期项目")
     a = make_milestone(
         db, project, "A", start_date=date(2026, 11, 20), commit_date=date(2026, 11, 13)
     )
-    preview = reschedule_service.create_preview(db, a.id, date(2026, 11, 15), None, "current")
-    assert preview["new_start_date"] == "2026-11-22"
     with pytest.raises(reschedule_service.RescheduleError) as exc:
-        reschedule_service.apply_preview(db, preview["preview_id"], "非法", "current")
+        reschedule_service.create_preview(db, a.id, date(2026, 11, 15), None, "current")
     assert exc.value.status_code == 400
+    assert "开始日晚于承诺日" in exc.value.message
     db.refresh(a)
     assert a.commit_date == date(2026, 11, 13)
     assert a.start_date == date(2026, 11, 20)
     assert a.version == 1
+
+
+def test_preview_rejects_new_start_after_new_commit(db):
+    """IMP-1：预览阶段即拒绝「新开始日 > 新承诺日」的输入。"""
+    project = make_project(db, "预览非法日期项目")
+    a = make_milestone(
+        db, project, "A", start_date=date(2026, 11, 2), commit_date=date(2026, 11, 13)
+    )
+    with pytest.raises(reschedule_service.RescheduleError) as exc:
+        reschedule_service.create_preview(
+            db, a.id, date(2026, 11, 13), date(2026, 11, 20), "current"
+        )
+    assert exc.value.status_code == 400
+    assert "开始日晚于承诺日" in exc.value.message
+    assert exc.value.detail["milestone_id"] == a.id
+    db.refresh(a)
+    assert a.start_date == date(2026, 11, 2)
+    assert a.commit_date == date(2026, 11, 13)
+    assert a.version == 1
+
+
+def test_preview_rejects_inverted_successor_in_cascade(db):
+    """IMP-1：联动后继的开始日晚于承诺日时，预览同样整笔拒绝（与提交一致）。"""
+    project = make_project(db, "联动非法日期项目")
+    a = make_milestone(
+        db, project, "A", start_date=date(2026, 11, 2), commit_date=date(2026, 11, 13)
+    )
+    b = make_milestone(
+        db, project, "B", start_date=date(2026, 11, 20), commit_date=date(2026, 11, 15)
+    )
+    link(db, b.id, a.id)
+    with pytest.raises(reschedule_service.RescheduleError) as exc:
+        reschedule_service.create_preview(db, a.id, date(2026, 11, 15), None, "cascade")
+    assert exc.value.status_code == 400
+    assert "开始日晚于承诺日" in exc.value.message
+    assert exc.value.detail["milestone_id"] == b.id
+    db.refresh(b)
+    assert b.start_date == date(2026, 11, 20)
+    assert b.commit_date == date(2026, 11, 15)
+
+
+def test_apply_rejects_legacy_invalid_preview(db):
+    """IMP-1：守卫上线前的历史预览在提交阶段同样整笔拒绝（预览/提交一致）。"""
+    import json
+
+    project = make_project(db, "历史非法预览项目")
+    a = make_milestone(
+        db, project, "A", start_date=date(2026, 11, 2), commit_date=date(2026, 11, 13)
+    )
+    payload = {
+        "milestone_id": a.id,
+        "milestone_name": "A",
+        "project_id": project.id,
+        "mode": "current",
+        "delta_days": 0,
+        "old_commit_date": "2026-11-13",
+        "new_commit_date": "2026-11-13",
+        "old_start_date": "2026-11-02",
+        "new_start_date": "2026-11-20",
+        "changes": [
+            {
+                "milestone_id": a.id,
+                "name": "A",
+                "state": "进行中",
+                "old_start_date": "2026-11-02",
+                "old_commit_date": "2026-11-13",
+                "new_start_date": "2026-11-20",
+                "new_commit_date": "2026-11-13",
+                "note": "",
+            }
+        ],
+        "affected_not_modified": [],
+        "buffer": {},
+        "successor_count": 0,
+        "impact_ids": [a.id],
+    }
+    row = reschedule_service.ReschedulePreview(
+        milestone_id=a.id,
+        mode="current",
+        payload_json=json.dumps(payload, ensure_ascii=False),
+        versions_json=json.dumps({str(a.id): a.version}),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    with pytest.raises(reschedule_service.RescheduleError) as exc:
+        reschedule_service.apply_preview(db, row.id, "历史预览", "current")
+    assert exc.value.status_code == 400
+    assert "开始日晚于承诺日" in exc.value.message
+    db.refresh(a)
+    assert a.start_date == date(2026, 11, 2)
+    assert a.commit_date == date(2026, 11, 13)
+    assert a.version == 1
+
+
+def test_empty_date_semantics_unchanged(db):
+    """IMP-1 不改变空日期语义：单边留空按平移/保留，两个都空仍报「必须给出日期」。"""
+    project = make_project(db, "空日期语义项目")
+    a = make_milestone(
+        db, project, "A", start_date=date(2026, 11, 2), commit_date=date(2026, 11, 13)
+    )
+    preview = reschedule_service.create_preview(db, a.id, date(2026, 11, 15), None, "current")
+    assert preview["new_start_date"] == "2026-11-04"
+    assert preview["new_commit_date"] == "2026-11-15"
+
+    with pytest.raises(reschedule_service.RescheduleError) as exc:
+        reschedule_service.create_preview(db, a.id, None, None, "current")
+    assert exc.value.status_code == 400
+    assert "必须给出新的承诺日或开始日" in exc.value.message
 
 
 def test_version_conflict_rejects_whole(db):
