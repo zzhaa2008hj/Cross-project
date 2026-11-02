@@ -20,6 +20,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine
 
+from .export import SCHEMA_VERSION
 from .snapshot import snapshot_db
 
 __all__ = [
@@ -287,6 +288,82 @@ def _insert_rows(conn: sqlite3.Connection, table, rows: list[dict]) -> int:
     return len(payload)
 
 
+def _validate_export_payload(payload: dict) -> dict[str, list[dict]]:
+    """校验导出载荷的结构，返回"表名 → 行列表"；结构非法时抛 ``ValueError``。
+
+    校验在动库之前完成，且只看结构不看行数：完整空库（各表 ``[]``）是本产品自己能
+    产出的合法状态（新建库备份后立刻恢复即此情形），行数不构成合法性判据。逐项：
+
+    * ``schema_version`` 存在时必须等于当前版本；
+    * ``tables`` 必须是对象，且包含当前模型的全部表；
+    * 每张表的表值必须是数组——``false``/``null``/``0``/空串/对象都不是空数据；
+    * 每行必须是对象，键必须属于该表的列（未知列拒绝，不静默丢弃）；
+    * 每行必须带齐该表的全部非空列（含主键），且值不得为 ``None``。
+
+    第 5 条不是额外的门槛：``_insert_rows`` 用裸 ``executemany`` 加显式列清单，
+    模型在 Python 侧声明的默认值不会生效，缺非空列必然触发 NOT NULL 约束失败。
+    这里提前拦下，换来的是可读的 ``ValueError`` 而不是裸 ``IntegrityError``，且
+    拒绝发生在发布之前（现库不变）。列内合法的 ``NULL``（可空列）与 ``0`` 不受影响。
+    """
+    if not isinstance(payload, dict) or "tables" not in payload:
+        raise ValueError("导出文件缺少 tables 段，不是有效的导出文件")
+
+    exported = payload.get("tables")
+    if not isinstance(exported, dict):
+        raise ValueError("导出文件的 tables 段不是对象，不是有效的导出文件")
+
+    if "schema_version" in payload and payload["schema_version"] != SCHEMA_VERSION:
+        raise ValueError(
+            f"导出文件的 schema_version 是 {payload['schema_version']!r}，"
+            f"当前恢复端只接受 {SCHEMA_VERSION}，拒绝恢复"
+        )
+
+    base = _models()
+    tables = base.metadata.sorted_tables
+    missing_tables = [table.name for table in tables if table.name not in exported]
+    if missing_tables:
+        raise ValueError(
+            "导出文件缺少必需的表：" + "、".join(missing_tables) + "，拒绝恢复（会清空现库）"
+        )
+
+    prepared: dict[str, list[dict]] = {}
+    for table in tables:
+        rows = exported[table.name]
+        if not isinstance(rows, list):
+            raise ValueError(
+                f"导出文件的表 {table.name} 不是数组（值是 {type(rows).__name__}），"
+                "拒绝恢复"
+            )
+        columns = {column.name for column in table.columns}
+        required = {column.name for column in table.columns if not column.nullable}
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise ValueError(
+                    f"导出文件的表 {table.name} 第 {index + 1} 行不是对象（值是 "
+                    f"{type(row).__name__}），拒绝恢复"
+                )
+            unknown = sorted(set(row) - columns)
+            if unknown:
+                raise ValueError(
+                    f"导出文件的表 {table.name} 第 {index + 1} 行含未知字段："
+                    f"{'、'.join(unknown)}，拒绝恢复"
+                )
+            missing = sorted(required - set(row))
+            if missing:
+                raise ValueError(
+                    f"导出文件的表 {table.name} 第 {index + 1} 行缺少必需字段："
+                    f"{'、'.join(missing)}，拒绝恢复"
+                )
+            nulled = sorted(name for name in required if row.get(name) is None)
+            if nulled:
+                raise ValueError(
+                    f"导出文件的表 {table.name} 第 {index + 1} 行的非空字段为 NULL："
+                    f"{'、'.join(nulled)}，拒绝恢复"
+                )
+        prepared[table.name] = rows
+    return prepared
+
+
 def restore_json(source: Path, db_path: Path, stamp: str) -> dict:
     """用导出 JSON 重建现库，保留回滚副本。
 
@@ -301,22 +378,11 @@ def restore_json(source: Path, db_path: Path, stamp: str) -> dict:
         payload = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"导出文件无法读取：{exc}") from exc
-    if not isinstance(payload, dict) or "tables" not in payload:
-        raise ValueError("导出文件缺少 tables 段，不是有效的导出文件")
+
+    # 先把整份载荷校验完再动库：非法结构在这里被拒，现库与回滚副本都不沾边。
+    prepared = _validate_export_payload(payload)
 
     base = _models()
-    tables = base.metadata.sorted_tables
-    exported = payload.get("tables")
-    if not isinstance(exported, dict):
-        raise ValueError("导出文件的 tables 段不是对象，不是有效的导出文件")
-    missing_tables = [table.name for table in tables if table.name not in exported]
-    if missing_tables:
-        raise ValueError(
-            "导出文件缺少必需的表：" + "、".join(missing_tables) + "，拒绝恢复（会清空现库）"
-        )
-    # 这里刻意不做"至少一行数据"的判断：完整空库是本产品自己能产出的合法状态
-    # （新建库备份后立刻恢复即此情形），行数不构成合法性判据。
-
     with restore_lock(db_path):
         tmp = db_path.parent / f".{db_path.name}.restore-json-{stamp}.tmp"
         for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
@@ -332,9 +398,8 @@ def restore_json(source: Path, db_path: Path, stamp: str) -> dict:
         conn = sqlite3.connect(str(tmp))
         try:
             conn.execute("PRAGMA foreign_keys=OFF")
-            for table in tables:
-                rows = exported.get(table.name) or []
-                _insert_rows(conn, table, rows)
+            for table in base.metadata.sorted_tables:
+                _insert_rows(conn, table, prepared[table.name])
             conn.commit()
             problems = validate_sqlite_candidate(tmp)
         finally:
