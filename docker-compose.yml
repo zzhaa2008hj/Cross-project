@@ -1,0 +1,60 @@
+# E1 预览环境：本机浏览器 http://127.0.0.1:18330
+# 资源前缀 pc-52a8eeac；数据 bind mount 到项目登记的 Git 外存储，不随容器删除。
+name: pc-52a8eeac-develop
+
+services:
+  backend:
+    build:
+      context: ./backend
+    image: pc-52a8eeac-backend:preview
+    container_name: pc-52a8eeac-develop-backend
+    restart: unless-stopped
+    environment:
+      CP_DATA_DIR: /data
+      CP_VAULT_DIR: /vault
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      # SQLite 数据：本项目登记的 Git 外存储（数据卷不随容器隐式删除）
+      - type: bind
+        source: /home/hui/.local/share/paperclip-project-data/52a8eeac-d442-420e-af14-663ffd7af0ee
+        target: /data
+      # vault 只读来源（正式写回不在 E1 范围）
+      - type: bind
+        source: /home/hui/MyData/AI/my-vault
+        target: /vault
+        read_only: true
+    networks:
+      - pc-52a8eeac-develop-net
+    labels:
+      project: "52a8eeac-d442-420e-af14-663ffd7af0ee"
+      issue: "fe76ba8b-5b73-4865-ba2b-97df79bd25b9"
+      owner: "8769c0b0-acb4-4893-9294-01564a7aef05"
+      lifecycle: "preview"
+
+  frontend:
+    build:
+      context: ./frontend
+    image: pc-52a8eeac-frontend:preview
+    container_name: pc-52a8eeac-develop-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:18330:80"
+    networks:
+      - pc-52a8eeac-develop-net
+    labels:
+      project: "52a8eeac-d442-420e-af14-663ffd7af0ee"
+      issue: "fe76ba8b-5b73-4865-ba2b-97df79bd25b9"
+      owner: "8769c0b0-acb4-4893-9294-01564a7aef05"
+      lifecycle: "preview"
+
+networks:
+  pc-52a8eeac-develop-net:
+    name: pc-52a8eeac-develop-net
+    labels:
+      project: "52a8eeac-d442-420e-af14-663ffd7af0ee"
+      issue: "fe76ba8b-5b73-4865-ba2b-97df79bd25b9"
+      owner: "8769c0b0-acb4-4893-9294-01564a7aef05"
+      lifecycle: "preview"
