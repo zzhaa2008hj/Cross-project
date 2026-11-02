@@ -16,11 +16,65 @@ export interface Person {
   id: number;
   name: string;
   roles: string;
+  skills: string;
   weekly_capacity: number | null;
   note: string;
   archived: boolean;
   source_ref: string | null;
   edited_in_app: boolean;
+}
+
+// E2：项目职责。只表达职责，不计入占用。
+export interface Assignment {
+  id: number;
+  person_id: number;
+  project_id: number;
+  role: string;
+  note: string;
+  person_name: string | null;
+  project_name: string | null;
+}
+
+// E2：周投入分配。唯一占用来源，跨页共用同一个稳定 ID。
+export interface Allocation {
+  id: number;
+  person_id: number;
+  project_id: number;
+  week: string;
+  week_end: string | null;
+  days: number;
+  milestone_id: number | null;
+  kind: "milestone" | "project_management";
+  note: string;
+  person_name: string | null;
+  project_name: string | null;
+  milestone_name: string | null;
+}
+
+export interface MilestoneBrief {
+  id: number;
+  name: string;
+  state: string;
+  commit_date: string | null;
+  start_date: string | null;
+  assignee_id: number | null;
+}
+
+// E2：人员某一周的全量视图，人员页与项目页共用。
+export interface PersonWeek {
+  person_id: number;
+  week: string;
+  week_end: string;
+  capacity: number | null;
+  capacity_source: "default" | "override";
+  total_days: number;
+  over_days: number | null;
+  remaining_days: number | null;
+  reviewed: boolean;
+  allocations: Allocation[];
+  assignments: Assignment[];
+  unallocated_milestones: MilestoneBrief[];
+  status_text: string;
 }
 
 export interface Milestone {

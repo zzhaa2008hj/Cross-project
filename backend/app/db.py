@@ -45,15 +45,24 @@ def init_db() -> None:
 
 # 新增列不会由 create_all 补齐（已存在的表只会保持原样），
 # 这里做一次轻量补列，保证旧预览库升级后仍可用。
-_ADDED_COLUMNS = {"milestones": [("source_dep_names", "TEXT")]}
+_ADDED_COLUMNS = {
+    "milestones": [("source_dep_names", "TEXT")],
+    "persons": [("skills", "TEXT DEFAULT ''")],
+}
 
 
 def _add_missing_columns() -> None:
-    from sqlalchemy import inspect, text
+    """在已有库上补列。
 
-    inspector = inspect(engine)
-    tables = set(inspector.get_table_names())
-    with engine.begin() as conn:
+    反射可能读到过期快照（同一连接上已有未结束事务），所以 ALTER 遇到
+    "duplicate column" 视为已补齐，保证重复执行安全且不丢数据。
+    """
+    from sqlalchemy import inspect, text
+    from sqlalchemy.exc import OperationalError
+
+    with engine.connect() as conn:
+        inspector = inspect(conn)
+        tables = set(inspector.get_table_names())
         for table, columns in _ADDED_COLUMNS.items():
             if table not in tables:
                 continue
@@ -61,7 +70,13 @@ def _add_missing_columns() -> None:
             for name, ddl in columns:
                 if name in existing:
                     continue
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                try:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                    conn.commit()
+                except OperationalError as exc:
+                    conn.rollback()
+                    if "duplicate column" not in str(exc).lower():
+                        raise
 
 
 def get_db() -> Iterator[Session]:

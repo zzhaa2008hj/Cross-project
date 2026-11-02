@@ -10,14 +10,24 @@ from sqlalchemy.orm import Session
 from . import config
 from .db import get_db
 from .models import (
+    Allocation,
+    Assignment,
     HistoryEntry,
     ImportRun,
     Milestone,
     MilestoneDependency,
     Person,
     Project,
+    WeekCapacity,
+    WeekReview,
 )
 from .schemas import (
+    AllocationCreate,
+    AllocationOut,
+    AllocationUpdate,
+    AssignmentCreate,
+    AssignmentOut,
+    AssignmentUpdate,
     HistoryOut,
     ImportRecordOut,
     ImportReportOut,
@@ -28,17 +38,21 @@ from .schemas import (
     PersonCreate,
     PersonOut,
     PersonUpdate,
+    PersonWeekOut,
     ProjectCreate,
     ProjectDetail,
     ProjectOut,
     ProjectUpdate,
     RescheduleApply,
     RescheduleRequest,
+    WeekCapacityUpdate,
+    WeekReviewUpdate,
 )
 from .services import buffer as buffer_service
 from .services import history as history_service
 from .services import importer as importer_service
 from .services import reschedule as reschedule_service
+from .services import weekly as weekly_service
 
 router = APIRouter(prefix="/api")
 
@@ -84,7 +98,7 @@ def meta() -> dict:
         "terminal_milestone_states": list(config.TERMINAL_MILESTONE_STATES),
         "expected_milestone_count": config.EXPECTED_MILESTONE_COUNT,
         "expected_maintenance_project_count": config.EXPECTED_MAINTENANCE_PROJECT_COUNT,
-        "allocation_supported": False,
+        "allocation_supported": True,
         "vault_available": config.vault_dir().exists(),
     }
 
@@ -108,7 +122,9 @@ def create_person(payload: PersonCreate, db: Session = Depends(get_db)):
     person = Person(
         name=payload.name,
         roles=payload.roles,
+        skills=payload.skills,
         note=payload.note,
+        weekly_capacity=payload.weekly_capacity,
         edited_in_app=True,
     )
     db.add(person)
@@ -125,10 +141,51 @@ def update_person(person_id: int, payload: PersonUpdate, db: Session = Depends(g
     if person is None:
         raise HTTPException(status_code=404, detail="人员不存在")
     data = payload.model_dump(exclude_unset=True)
+    if "name" in data:
+        dup = db.execute(
+            select(Person).where(Person.name == data["name"], Person.id != person_id)
+        ).scalar_one_or_none()
+        if dup:
+            raise HTTPException(status_code=409, detail=f"人员「{data['name']}」已存在")
+    for field in ("roles", "skills", "note"):
+        if field in data and data[field] is None:
+            data[field] = ""
     for field, value in data.items():
         setattr(person, field, value)
     person.edited_in_app = True
     history_service.record(db, "person", person.id, person.name, "update", reason="人员资料更新")
+    db.commit()
+    db.refresh(person)
+    return person
+
+
+@router.post("/persons/{person_id}/archive", response_model=PersonOut)
+def archive_person(person_id: int, db: Session = Depends(get_db)):
+    """归档人员：保留历史与既有分配，不做物理删除。"""
+    person = db.get(Person, person_id)
+    if person is None:
+        raise HTTPException(status_code=404, detail="人员不存在")
+    if not person.archived:
+        person.archived = True
+        person.edited_in_app = True
+        history_service.record(
+            db, "person", person.id, person.name, "archive", "archived", False, True, "人员归档"
+        )
+        db.commit()
+        db.refresh(person)
+    return person
+
+
+@router.post("/persons/{person_id}/restore", response_model=PersonOut)
+def restore_person(person_id: int, db: Session = Depends(get_db)):
+    person = db.get(Person, person_id)
+    if person is None:
+        raise HTTPException(status_code=404, detail="人员不存在")
+    person.archived = False
+    person.edited_in_app = True
+    history_service.record(
+        db, "person", person.id, person.name, "restore", "archived", True, False, "人员恢复"
+    )
     db.commit()
     db.refresh(person)
     return person
@@ -255,6 +312,22 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=409,
             detail="项目下仍有节点，为不丢历史不允许删除，请改用归档",
+        )
+    assignments = db.execute(
+        select(func.count()).select_from(Assignment).where(Assignment.project_id == project_id)
+    ).scalar_one()
+    if assignments:
+        raise HTTPException(
+            status_code=409,
+            detail="项目仍有职责分配，为不丢历史不允许删除，请先解除职责或改用归档",
+        )
+    allocations = db.execute(
+        select(func.count()).select_from(Allocation).where(Allocation.project_id == project_id)
+    ).scalar_one()
+    if allocations:
+        raise HTTPException(
+            status_code=409,
+            detail="项目仍有周投入分配，为不丢历史不允许删除，请先删除分配或改用归档",
         )
     history_service.record(
         db, "project", project.id, project.name, "delete", "project", project.name, "", "删除空项目"
@@ -399,6 +472,16 @@ def delete_milestone(milestone_id: int, db: Session = Depends(get_db)):
     if dependents:
         raise HTTPException(
             status_code=409, detail="该节点被其它节点引用，为不丢历史不允许删除，请先解除依赖"
+        )
+    allocation_refs = db.execute(
+        select(func.count())
+        .select_from(Allocation)
+        .where(Allocation.milestone_id == milestone_id)
+    ).scalar_one()
+    if allocation_refs:
+        raise HTTPException(
+            status_code=409,
+            detail="该节点仍被周投入分配引用，为不丢历史不允许删除，请先删除相关分配",
         )
     history_service.record(
         db,
@@ -607,3 +690,293 @@ def seed_demo(db: Session = Depends(get_db)):
     db.commit()
     db.refresh(project)
     return project_detail(db, project)
+
+
+# ------------------------------------------------------------------ E2：职责 / 容量 / 分配 / 核对
+#
+# 口径（首版计划）：
+# - 周键必须是周一（Asia/Shanghai），覆盖周一至周日。
+# - 只有 Allocation 计入占用；职责（Assignment）与节点执行人不计占用。
+# - 容量来源：指定周覆盖 > 默认周容量；指定周显式未知不回退默认。
+# - 未知 != 0：容量未知或投入未核对时不给精确剩余。
+# - 分配一旦变动，该人员该周投入回到"待核对"。
+
+
+def _require_week(week: date) -> date:
+    if week.weekday() != 0:
+        raise HTTPException(status_code=422, detail="周键必须是周一日期")
+    return week
+
+
+def _get_person(db: Session, person_id: int) -> Person:
+    person = db.get(Person, person_id)
+    if person is None:
+        raise HTTPException(status_code=404, detail="人员不存在")
+    return person
+
+
+def _get_project(db: Session, project_id: int) -> Project:
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    return project
+
+
+def _check_milestone(db: Session, milestone_id: int | None, project_id: int) -> None:
+    """节点引用必须存在且属于同一项目，否则整笔拒绝。"""
+    if milestone_id is None:
+        return
+    milestone = db.get(Milestone, milestone_id)
+    if milestone is None:
+        raise HTTPException(status_code=422, detail="节点不存在")
+    if milestone.project_id != project_id:
+        raise HTTPException(status_code=422, detail="节点必须属于同一项目")
+
+
+def _derive_kind(milestone_id: int | None, requested: str | None) -> str:
+    expected = "milestone" if milestone_id else "project_management"
+    if requested and requested != expected:
+        raise HTTPException(status_code=422, detail="分配类型与节点关联不一致")
+    return expected
+
+
+# ------------------------------------------------------------------ 人员周视图
+
+
+@router.get("/persons/{person_id}/weeks/{week}", response_model=PersonWeekOut)
+def get_person_week(person_id: int, week: date, db: Session = Depends(get_db)):
+    person = _get_person(db, person_id)
+    _require_week(week)
+    return weekly_service.person_week(db, person, week)
+
+
+@router.put("/persons/{person_id}/weeks/{week}/capacity", response_model=PersonWeekOut)
+def set_person_week_capacity(
+    person_id: int, week: date, payload: WeekCapacityUpdate, db: Session = Depends(get_db)
+):
+    """指定周容量覆盖。days 为 null 表示"显式未知"，不回退默认容量。"""
+    person = _get_person(db, person_id)
+    _require_week(week)
+    if "days" not in payload.model_fields_set:
+        raise HTTPException(status_code=422, detail="必须显式给出容量（数值或 null 表示未知）")
+    row = db.execute(
+        select(WeekCapacity).where(
+            WeekCapacity.person_id == person_id, WeekCapacity.week == week
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = WeekCapacity(person_id=person_id, week=week)
+        db.add(row)
+    row.days = payload.days
+    row.note = payload.note
+    db.commit()
+    return weekly_service.person_week(db, person, week)
+
+
+@router.delete("/persons/{person_id}/weeks/{week}/capacity", response_model=PersonWeekOut)
+def delete_person_week_capacity(
+    person_id: int, week: date, db: Session = Depends(get_db)
+):
+    """删除指定周覆盖后，回到默认周容量。"""
+    person = _get_person(db, person_id)
+    _require_week(week)
+    row = db.execute(
+        select(WeekCapacity).where(
+            WeekCapacity.person_id == person_id, WeekCapacity.week == week
+        )
+    ).scalar_one_or_none()
+    if row is not None:
+        db.delete(row)
+        db.commit()
+    return weekly_service.person_week(db, person, week)
+
+
+@router.put("/persons/{person_id}/weeks/{week}/review", response_model=PersonWeekOut)
+def set_person_week_review(
+    person_id: int, week: date, payload: WeekReviewUpdate, db: Session = Depends(get_db)
+):
+    """显式标记"本周投入已核对"。只有核对后才给精确剩余。"""
+    person = _get_person(db, person_id)
+    _require_week(week)
+    row = db.execute(
+        select(WeekReview).where(WeekReview.person_id == person_id, WeekReview.week == week)
+    ).scalar_one_or_none()
+    if row is None:
+        row = WeekReview(person_id=person_id, week=week)
+        db.add(row)
+    row.reviewed = payload.reviewed
+    db.commit()
+    return weekly_service.person_week(db, person, week)
+
+
+# ------------------------------------------------------------------ 项目职责
+
+
+@router.get("/assignments", response_model=list[AssignmentOut])
+def list_assignments(
+    person_id: int | None = None,
+    project_id: int | None = None,
+    role: str | None = None,
+    db: Session = Depends(get_db),
+):
+    stmt = select(Assignment).order_by(Assignment.id)
+    if person_id is not None:
+        stmt = stmt.where(Assignment.person_id == person_id)
+    if project_id is not None:
+        stmt = stmt.where(Assignment.project_id == project_id)
+    if role is not None:
+        stmt = stmt.where(Assignment.role == role)
+    return [weekly_service.assignment_out(db, a) for a in db.execute(stmt).scalars().all()]
+
+
+@router.post("/assignments", response_model=AssignmentOut, status_code=201)
+def create_assignment(payload: AssignmentCreate, db: Session = Depends(get_db)):
+    _get_person(db, payload.person_id)
+    _get_project(db, payload.project_id)
+    dup = db.execute(
+        select(Assignment).where(
+            Assignment.person_id == payload.person_id,
+            Assignment.project_id == payload.project_id,
+            Assignment.role == payload.role,
+        )
+    ).scalar_one_or_none()
+    if dup:
+        raise HTTPException(status_code=409, detail="该人员在此项目上已有同名职责")
+    item = Assignment(
+        person_id=payload.person_id,
+        project_id=payload.project_id,
+        role=payload.role,
+        note=payload.note,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return weekly_service.assignment_out(db, item)
+
+
+@router.patch("/assignments/{assignment_id}", response_model=AssignmentOut)
+def update_assignment(
+    assignment_id: int, payload: AssignmentUpdate, db: Session = Depends(get_db)
+):
+    item = db.get(Assignment, assignment_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="职责不存在")
+    data = payload.model_dump(exclude_unset=True)
+    role = data.get("role", item.role)
+    if role != item.role:
+        dup = db.execute(
+            select(Assignment).where(
+                Assignment.person_id == item.person_id,
+                Assignment.project_id == item.project_id,
+                Assignment.role == role,
+                Assignment.id != item.id,
+            )
+        ).scalar_one_or_none()
+        if dup:
+            raise HTTPException(status_code=409, detail="该人员在此项目上已有同名职责")
+    for field, value in data.items():
+        setattr(item, field, "" if value is None and field == "note" else value)
+    db.commit()
+    db.refresh(item)
+    return weekly_service.assignment_out(db, item)
+
+
+@router.delete("/assignments/{assignment_id}")
+def delete_assignment(assignment_id: int, db: Session = Depends(get_db)):
+    item = db.get(Assignment, assignment_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="职责不存在")
+    db.delete(item)
+    db.commit()
+    return {"deleted": assignment_id}
+
+
+# ------------------------------------------------------------------ 周投入分配
+
+
+@router.get("/allocations", response_model=list[AllocationOut])
+def list_allocations(
+    person_id: int | None = None,
+    project_id: int | None = None,
+    week: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """按人/项目/周筛选分配。筛选只影响视图，不改变占用口径。"""
+    if week is not None:
+        _require_week(week)
+    items = weekly_service.list_allocations(db, person_id, project_id, week)
+    return [weekly_service.allocation_out(db, a) for a in items]
+
+
+@router.post("/allocations", response_model=AllocationOut, status_code=201)
+def create_allocation(payload: AllocationCreate, db: Session = Depends(get_db)):
+    _get_person(db, payload.person_id)
+    _get_project(db, payload.project_id)
+    _check_milestone(db, payload.milestone_id, payload.project_id)
+    kind = _derive_kind(payload.milestone_id, payload.kind or None)
+    item = Allocation(
+        person_id=payload.person_id,
+        project_id=payload.project_id,
+        week=payload.week,
+        days=payload.days,
+        milestone_id=payload.milestone_id,
+        kind=kind,
+        note=payload.note,
+    )
+    db.add(item)
+    db.flush()
+    weekly_service.reset_review(db, payload.person_id, payload.week)
+    db.commit()
+    db.refresh(item)
+    return weekly_service.allocation_out(db, item)
+
+
+@router.patch("/allocations/{allocation_id}", response_model=AllocationOut)
+def update_allocation(
+    allocation_id: int, payload: AllocationUpdate, db: Session = Depends(get_db)
+):
+    item = db.get(Allocation, allocation_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="分配不存在")
+    data = payload.model_dump(exclude_unset=True)
+    if "days" in data and data["days"] is None:
+        raise HTTPException(status_code=422, detail="人天不能为空，未知请用 0 之外的方式表达")
+    person_id = data.get("person_id", item.person_id)
+    project_id = data.get("project_id", item.project_id)
+    week = data.get("week", item.week)
+    milestone_id = data["milestone_id"] if "milestone_id" in data else item.milestone_id
+    _get_person(db, person_id)
+    _get_project(db, project_id)
+    _require_week(week)
+    _check_milestone(db, milestone_id, project_id)
+    kind = _derive_kind(milestone_id, data.get("kind", item.kind))
+    old_person, old_week = item.person_id, item.week
+    data.pop("kind", None)
+    for field, value in data.items():
+        setattr(item, field, value)
+    item.kind = kind
+    occupancy_changed = (
+        item.person_id != old_person
+        or item.week != old_week
+        or item.milestone_id != milestone_id
+        or item.days != payload.days
+        or kind != item.kind
+    )
+    weekly_service.reset_review(db, old_person, old_week)
+    if (item.person_id, item.week) != (old_person, old_week):
+        weekly_service.reset_review(db, item.person_id, item.week)
+    db.commit()
+    db.refresh(item)
+    return weekly_service.allocation_out(db, item)
+
+
+@router.delete("/allocations/{allocation_id}")
+def delete_allocation(allocation_id: int, db: Session = Depends(get_db)):
+    item = db.get(Allocation, allocation_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="分配不存在")
+    person_id, week = item.person_id, item.week
+    db.delete(item)
+    weekly_service.reset_review(db, person_id, week)
+    db.commit()
+    return {"deleted": allocation_id}

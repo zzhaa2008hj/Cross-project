@@ -2,7 +2,7 @@ from datetime import date
 
 from sqlalchemy import inspect
 
-from app.models import HistoryEntry, Milestone, MilestoneDependency, Person, Project
+from app.models import Allocation, HistoryEntry, Milestone, MilestoneDependency, Person, Project
 
 
 def test_health_and_meta(client):
@@ -10,7 +10,7 @@ def test_health_and_meta(client):
     meta = client.get("/api/meta").json()
     assert meta["project_states"] == ["active", "on-hold", "done", "maintenance"]
     assert len(meta["milestone_states"]) == 6
-    assert meta["allocation_supported"] is False
+    assert meta["allocation_supported"] is True
 
 
 def test_project_crud_and_archive_keeps_history(client, db):
@@ -52,9 +52,12 @@ def test_milestone_crud_assignee_no_allocation(client, db):
     assert body["assignee_name"] == "郑伊平"
     assert body["buffer"]["window_workdays"] == 10
     assert body["buffer"]["internal_target"] == "2026-11-11"
-    # E1 不产生任何占用记录
+    # 节点分派/执行人不产生任何占用记录（E2 起占用只由 Allocation 表达）
     assert db.query(Milestone).one().assignee_id == person["id"]
-    assert "allocations" not in inspect(db.get_bind()).get_table_names()
+    assert db.query(Allocation).count() == 0
+    week = client.get(f"/api/persons/{person['id']}/weeks/2026-11-02").json()
+    assert week["total_days"] == 0
+    assert week["allocations"] == []
 
 
 def test_delete_with_reference_is_rejected_history_preserved(client, db):

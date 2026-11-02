@@ -42,6 +42,11 @@ MILESTONE_STATES = (
 )
 TERMINAL_MILESTONE_STATES = ("已完成", "已取消")
 
+# E2：项目职责（只记录角色，不产生占用）
+ASSIGNMENT_ROLES = ("项目负责人", "业务对接", "节点执行", "统筹管理")
+# E2：分配类型——关联节点，或整体项目管理投入
+ALLOCATION_KINDS = ("milestone", "project_management")
+
 
 def data_dir() -> Path:
     return Path(os.environ.get("CP_DATA_DIR", str(_DEFAULT_DATA_DIR)))
