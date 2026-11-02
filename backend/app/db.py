@@ -40,6 +40,28 @@ def init_db() -> None:
     from . import models  # noqa: F401  确保模型注册
 
     Base.metadata.create_all(bind=engine)
+    _add_missing_columns()
+
+
+# 新增列不会由 create_all 补齐（已存在的表只会保持原样），
+# 这里做一次轻量补列，保证旧预览库升级后仍可用。
+_ADDED_COLUMNS = {"milestones": [("source_dep_names", "TEXT")]}
+
+
+def _add_missing_columns() -> None:
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    with engine.begin() as conn:
+        for table, columns in _ADDED_COLUMNS.items():
+            if table not in tables:
+                continue
+            existing = {col["name"] for col in inspector.get_columns(table)}
+            for name, ddl in columns:
+                if name in existing:
+                    continue
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
 
 
 def get_db() -> Iterator[Session]:

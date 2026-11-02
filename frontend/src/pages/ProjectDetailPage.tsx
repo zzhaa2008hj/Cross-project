@@ -69,6 +69,23 @@ export default function ProjectDetailPage() {
     }
   }
 
+  async function toggleArchived() {
+    setError(null);
+    setMessage(null);
+    setBusy(true);
+    try {
+      // 归档/恢复走专用接口：ProjectUpdate 不接受 archived 字段
+      const next = project?.archived ? await api.restoreProject(pid) : await api.archiveProject(pid);
+      setProject(next);
+      setMessage(next.archived ? "项目已归档" : "项目已恢复");
+      setHistoryKey((k) => k + 1);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveMilestone() {
     setError(null);
     setMessage(null);
@@ -168,7 +185,7 @@ export default function ProjectDetailPage() {
           </Link>
           <button
             type="button"
-            onClick={() => patchProject({ archived: !project.archived })}
+            onClick={() => void toggleArchived()}
             disabled={busy}
           >
             {project.archived ? "恢复项目" : "归档项目"}

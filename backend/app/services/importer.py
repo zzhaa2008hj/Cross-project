@@ -606,12 +606,23 @@ def _source_entry(root: Path, path: Path, text: str) -> dict:
 
 
 def _diff(existing: dict, incoming: dict, fields: list[str]) -> list[dict]:
+    """字段差异。键名与前端契约一致：old_value / new_value。"""
     diffs: list[dict] = []
     for field in fields:
         old = existing.get(field)
         new = incoming.get(field)
         if str(old) != str(new):
-            diffs.append({"field": field, "old": old, "new": new})
+            diffs.append({"field": field, "old_value": old, "new_value": new})
+    return diffs
+
+
+def _locate_diffs(diffs: list[dict], record: dict) -> list[dict]:
+    """给每条差异补上来源定位（kind/key/source_ref），前端可直接定位到对象。"""
+    key = record.get("key") or record.get("values", {}).get("name") or ""
+    for diff in diffs:
+        diff.setdefault("kind", record["kind"])
+        diff.setdefault("key", key)
+        diff.setdefault("source_ref", record.get("source_ref") or "")
     return diffs
 
 
@@ -688,7 +699,7 @@ def apply_snapshot(db: Session, snapshot: dict, dry: bool = False) -> dict:
         report = _apply_project(db, record, project_cache)
         record_reports.append(report)
         pending_all.extend(record["pending"])
-        diffs_all.extend(report.get("diff") or [])
+        diffs_all.extend(_locate_diffs(report.get("diff") or [], record))
         if report["status"] == "import":
             imported += 1
         elif report["status"] == "skip":
@@ -718,7 +729,7 @@ def apply_snapshot(db: Session, snapshot: dict, dry: bool = False) -> dict:
             report = _apply_milestone(db, record, project_cache, person_cache)
         record_reports.append(report)
         pending_all.extend(report["pending"])
-        diffs_all.extend(report.get("diff") or [])
+        diffs_all.extend(_locate_diffs(report.get("diff") or [], record))
         milestone_reports.append((record, report))
         if report["status"] == "import":
             imported += 1
@@ -1011,6 +1022,8 @@ def _apply_milestone(
     existing.note = incoming["note"]
     existing.source_record_hash = record["source_hash"]
     existing.source_ref = record["source_ref"]
+    # 导入更新也算一次改动：版本递增，旧改期预览随即失效，避免用旧预览覆盖新导入的日期
+    existing.version = (existing.version or 1) + 1
     return {
         **base,
         "status": "import",
@@ -1030,9 +1043,19 @@ def _to_date(value: str | None) -> date | None:
 def _apply_dependencies(
     db: Session, milestone: Milestone, deps: list[str], project: Project
 ) -> dict:
+    """按源声明补依赖。
+
+    只补「源里新出现」的依赖边：源里声明过、但用户已在软件内删掉的边不再复活。
+    判定依据是 Milestone.source_dep_names（上次导入时源声明过的前置名）。
+    """
     pending: list[dict] = []
+    declared = [str(d).strip() for d in deps if str(d).strip()]
+    try:
+        previous = set(json.loads(milestone.source_dep_names or "[]"))
+    except (TypeError, ValueError):
+        previous = set()
     existing_pred = {d.predecessor_id for d in milestone.dependencies}
-    for dep_name in deps:
+    for dep_name in declared:
         target = _find_milestone(db, project, dep_name)
         if target is None:
             pending.append(
@@ -1044,7 +1067,12 @@ def _apply_dependencies(
                 }
             )
             continue
-        if target.id == milestone.id or target.id in existing_pred:
+        if target.id == milestone.id:
+            continue
+        if target.id in existing_pred:
+            continue
+        if dep_name in previous:
+            # 源里声明过、用户已删除：不复活
             continue
         db.add(
             MilestoneDependency(
@@ -1052,6 +1080,7 @@ def _apply_dependencies(
             )
         )
         existing_pred.add(target.id)
+    milestone.source_dep_names = json.dumps(sorted(set(declared)), ensure_ascii=False)
     return {"pending": pending}
 
 

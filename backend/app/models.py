@@ -93,6 +93,7 @@ class Milestone(Base):
     note: Mapped[str] = mapped_column(Text, default="")
     source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_record_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_dep_names: Mapped[str | None] = mapped_column(Text, nullable=True)
     edited_in_app: Mapped[bool] = mapped_column(Boolean, default=False)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     version: Mapped[int] = mapped_column(Integer, default=1)

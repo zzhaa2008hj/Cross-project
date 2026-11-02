@@ -180,19 +180,11 @@ def build_preview(
     # 传递后继：每个节点从快照只平移一次
     successors: list[Milestone] = []
     if mode == "cascade":
-        seen: set[int] = {ms.id}
-        queue = [ms.id]
-        while queue:
-            current = queue.pop(0)
-            for succ_id in successor_map.get(current, []):
-                if succ_id in seen:
-                    continue
-                seen.add(succ_id)
-                succ = db.get(Milestone, succ_id)
-                if succ is None:
-                    continue
-                successors.append(succ)
-                queue.append(succ_id)
+        for succ_id in _successor_ids(successor_map, ms.id):
+            succ = db.get(Milestone, succ_id)
+            if succ is None:
+                continue
+            successors.append(succ)
 
     for succ in successors:
         if succ.state in TERMINAL_MILESTONE_STATES:
@@ -228,7 +220,10 @@ def build_preview(
             note = (note + "；" if note else "") + "承诺日为空，保持为空"
         add_change(succ, new_start, new_commit, note)
 
-    versions = {str(c["milestone_id"]): _current_version(db, c["milestone_id"]) for c in changes}
+    # 影响范围快照：目标节点 + 全部传递后继（含只列不改动的那批），
+    # 提交时据此判断依赖图是否变化，避免静默漏改后继。
+    impact_ids = sorted({ms.id} | {s.id for s in successors})
+    versions = {str(mid): _current_version(db, mid) for mid in impact_ids}
     buffer_preview = buffer_service.derive_buffer(
         target_start, target_commit, ms.buffer_source, ms.workday_override
     )
@@ -247,6 +242,7 @@ def build_preview(
         "affected_not_modified": affected_not_modified,
         "buffer": buffer_preview,
         "successor_count": len(successors),
+        "impact_ids": impact_ids,
     }
     return {"payload": payload, "versions": versions}
 
@@ -254,6 +250,22 @@ def build_preview(
 def _current_version(db: Session, milestone_id: int) -> int:
     ms = db.get(Milestone, milestone_id)
     return ms.version if ms else -1
+
+
+def _successor_ids(successor_map: dict[int, list[int]], root_id: int) -> list[int]:
+    """从 root 出发按 BFS 顺序返回全部传递后继 id（不含 root 自身）。"""
+    seen: set[int] = {root_id}
+    ordered: list[int] = []
+    queue = [root_id]
+    while queue:
+        current = queue.pop(0)
+        for succ_id in successor_map.get(current, []):
+            if succ_id in seen:
+                continue
+            seen.add(succ_id)
+            ordered.append(succ_id)
+            queue.append(succ_id)
+    return ordered
 
 
 def create_preview(
@@ -277,6 +289,30 @@ def create_preview(
     payload["preview_id"] = row.id
     payload["versions"] = result["versions"]
     return payload
+
+
+def _refresh_preview(db: Session, payload: dict, mode: str) -> dict:
+    """按预览里记录的目标日期重新生成一份预览，供 409 后重新提交。"""
+    return create_preview(
+        db,
+        payload["milestone_id"],
+        date.fromisoformat(payload["new_commit_date"]) if payload.get("new_commit_date") else None,
+        date.fromisoformat(payload["new_start_date"]) if payload.get("new_start_date") else None,
+        mode,
+    )
+
+
+def _safe_refresh(db: Session, payload: dict, mode: str) -> dict:
+    """刷新预览；刷新本身失败（如已产生循环依赖）时把原因带回，不掩盖 409。"""
+    try:
+        return _refresh_preview(db, payload, mode)
+    except RescheduleError as exc:
+        return {
+            "refresh_failed": True,
+            "status_code": exc.status_code,
+            "message": exc.message,
+            "detail": exc.detail,
+        }
 
 
 def apply_preview(db: Session, preview_id: int, reason: str, mode: str) -> dict:
@@ -306,15 +342,7 @@ def apply_preview(db: Session, preview_id: int, reason: str, mode: str) -> dict:
         if stored_versions[k] != current_versions[k]
     }
     if changed:
-        fresh = create_preview(
-            db,
-            row.milestone_id,
-            date.fromisoformat(payload["new_commit_date"])
-            if payload.get("new_commit_date")
-            else None,
-            date.fromisoformat(payload["new_start_date"]) if payload.get("new_start_date") else None,
-            mode,
-        )
+        fresh = _safe_refresh(db, payload, mode)
         raise RescheduleError(
             409,
             "记录版本已变化，整笔拒绝，请基于刷新后的预览重新提交",
@@ -330,6 +358,24 @@ def apply_preview(db: Session, preview_id: int, reason: str, mode: str) -> dict:
         raise RescheduleError(400, "跨项目依赖首版不支持，整笔拒绝", {"edges": cross_project})
     if detect_cycle(successor_map):
         raise RescheduleError(400, "依赖关系存在循环，整笔拒绝")
+
+    # 影响范围校验：预览之后依赖图变了（新增/移除后继）-> 整笔拒绝，
+    # 否则旧预览会静默漏改后继。
+    stored_impact = sorted(
+        int(i) for i in (payload.get("impact_ids") or [row.milestone_id])
+    )
+    current_impact = (
+        sorted([ms.id] + _successor_ids(successor_map, ms.id))
+        if mode == "cascade"
+        else [ms.id]
+    )
+    if current_impact != stored_impact:
+        fresh = _safe_refresh(db, payload, mode)
+        raise RescheduleError(
+            409,
+            "影响范围已变化，整笔拒绝，请基于刷新后的预览重新提交",
+            {"stored_impact": stored_impact, "current_impact": current_impact, "refreshed_preview": fresh},
+        )
 
     changes = payload["changes"]
     if mode == "current":
@@ -391,6 +437,8 @@ def apply_preview(db: Session, preview_id: int, reason: str, mode: str) -> dict:
                 )
             if old_start != new_start or old_commit != new_commit:
                 target.version = (target.version or 1) + 1
+                # 用户在软件内改期后，后续导入不得再覆盖日期
+                target.edited_in_app = True
                 updated.append(
                     {
                         "milestone_id": target.id,
@@ -410,6 +458,7 @@ def apply_preview(db: Session, preview_id: int, reason: str, mode: str) -> dict:
         db.rollback()
         raise RescheduleError(500, f"改期提交失败，已整笔回滚：{exc}") from exc
 
+    target_ms = db.get(Milestone, payload["milestone_id"])
     return {
         "preview_id": preview_id,
         "mode": mode,
@@ -417,7 +466,9 @@ def apply_preview(db: Session, preview_id: int, reason: str, mode: str) -> dict:
         "updated": updated,
         "affected_not_modified": payload["affected_not_modified"],
         "buffer": buffer_service.derive_buffer(
-            db.get(Milestone, payload["milestone_id"]).start_date,
-            db.get(Milestone, payload["milestone_id"]).commit_date,
+            target_ms.start_date,
+            target_ms.commit_date,
+            target_ms.buffer_source,
+            target_ms.workday_override,
         ),
     }

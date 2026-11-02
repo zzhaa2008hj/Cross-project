@@ -73,10 +73,24 @@ export default function RescheduleDialog({
 
         <div className="form-grid">
           <Field label="新承诺日" hint="留空表示只改开始日">
-            <input type="date" value={newCommit} onChange={(e) => setNewCommit(e.target.value)} />
+            <input
+              type="date"
+              value={newCommit}
+              onChange={(e) => {
+                setNewCommit(e.target.value);
+                setPreview(null); // 日期变化后旧预览失效，需重新生成
+              }}
+            />
           </Field>
           <Field label="新开始日" hint="留空则按日历日差同步平移">
-            <input type="date" value={newStart} onChange={(e) => setNewStart(e.target.value)} />
+            <input
+              type="date"
+              value={newStart}
+              onChange={(e) => {
+                setNewStart(e.target.value);
+                setPreview(null); // 日期变化后旧预览失效，需重新生成
+              }}
+            />
           </Field>
           <Field label="联动范围">
             <select
