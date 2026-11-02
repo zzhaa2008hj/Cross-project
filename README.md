@@ -31,7 +31,23 @@ docker-compose.yml  本机预览编排
 DATA_DIR=/home/hui/.local/share/paperclip-project-data/52a8eeac-d442-420e-af14-663ffd7af0ee
 mkdir -p "$DATA_DIR/sqlite" "$DATA_DIR/backups"
 
-# 构建并启动
+# 共享网络：compose 中声明为 external，只挂接不重建，因此必须先于 up 准备。
+# 幂等：已存在就直接复用（E1 已建并带标签）；只有缺失时才创建，并打上
+# project/issue/owner/lifecycle 标签。这里绝不删除或重建任何既有网络——正式 QA
+# 容器（pc-52a8eeac-hui206-qa-backend）也连在这个网络上，重建会把它断掉。
+NET=pc-52a8eeac-develop-net
+if docker network inspect "$NET" >/dev/null 2>&1; then
+  echo "网络已存在，直接复用：$NET"
+else
+  docker network create \
+    --label project=52a8eeac-d442-420e-af14-663ffd7af0ee \
+    --label issue=89f32463-500a-4445-a05a-b7d7d16194c8 \
+    --label owner=8769c0b0-acb4-4893-9294-01564a7aef05 \
+    --label lifecycle=preview \
+    "$NET"
+fi
+
+# 构建并启动（容器挂到上面的网络；nginx 通过专属别名 cp-develop-backend 反代）
 docker compose up -d --build
 
 # 健康检查与访问
@@ -50,7 +66,7 @@ curl http://127.0.0.1:18330/api/health
 | backend 容器 | `pc-52a8eeac-develop-backend` |
 | frontend 容器 | `pc-52a8eeac-develop-frontend` |
 | 网络 | `pc-52a8eeac-develop-net` |
-| 镜像 | `pc-52a8eeac-backend:preview`、`pc-52a8eeac-frontend:preview` |
+| 镜像 | `pc-52a8eeac-backend:hui211-e4`、`pc-52a8eeac-frontend:hui211-e4`（固定标签，可复现） |
 
 无 named volume：SQLite 落在宿主 dataRoot，容器删除不会带走数据。
 
@@ -136,9 +152,88 @@ curl -s -X POST http://127.0.0.1:18330/api/imports \
 4. 本周投入填完后点"本周投入已核对"，才给出精确剩余；之后任何分配改动都会回到"待补充"。
 5. 打开 `/projects/:id`：卡片"周投入分配"列出本项目全部分配（带稳定 `分配#ID`）；下方每个相关人的周视图同时显示其**其他项目**的冲突分配，便于定位跨项目冲突。
 
+## E4：导出预览、一致性备份与恢复
+
+E4 交付三件事：**软件状态一致的导出预览**、**每日一致性备份与离线恢复**、**可复现的 Docker 使用路径**。
+
+### 导出预览（只读，不写回 vault）
+
+打开 `/export`：
+
+1. 点「生成导出预览」——后端对 SQLite 做在线一致性快照（`sqlite3.Connection.backup()`），JSON / Markdown / Obsidian 摘要三份产物同源于该快照。
+2. 页面展示快照版本、生成时间、各表行数，以及与上一次预览的差异（新增 / 修改 / 删除）。
+3. 三个下载入口：JSON、Markdown、Obsidian 摘要。
+4. 页面顶部固定提示：**本预览只读取软件数据库，不会写回 vault 笔记或脚本。**
+
+预览产物落在数据目录的 `exports/`（容器内 `/data/exports`），可用 `CP_EXPORT_DIR` 覆盖。
+
+### 每日一致性备份
+
+- 服务启动后起一个后台线程，按固定间隔做一次一致性备份（默认 24 小时，可用 `CP_BACKUP_INTERVAL_HOURS` 调整；`CP_BACKUP_ENABLED=0` 整体关闭）。
+- 备份目录：容器内 `/backups`，绑定到宿主 `<数据目录>/backups`（不在 vault 内）。
+- 每次备份是一个版本目录，含 `crossproject.db`（SQLite 一致性副本）、`export.json` 与 `export.md`。
+- 备份失败只记录日志，不影响服务运行。
+
+手动触发一次备份：
+
+```bash
+curl -s -X POST http://127.0.0.1:18330/api/backup/run
+```
+
+### 恢复演练（离线操作）
+
+恢复是离线操作：会先确认应用已停（数据库文件锁），应用仍在运行时会被拒绝。
+
+```bash
+cd backend
+
+# 1) 做一次一致性备份
+python -m app.backup_cli backup \
+  --db <数据目录>/sqlite/crossproject.db \
+  --backup-dir <数据目录>/backups
+
+# 2) 从 JSON 恢复（按当前模型重建库结构并写入数据）
+python -m app.backup_cli restore --type json \
+  --source <数据目录>/backups/<版本>/export.json \
+  --db <数据目录>/sqlite/crossproject.db
+
+# 3) 从 SQLite 副本恢复（原子替换）
+python -m app.backup_cli restore --type sqlite \
+  --source <数据目录>/backups/<版本>/crossproject.db \
+  --db <数据目录>/sqlite/crossproject.db
+```
+
+恢复流程固定为：**校验 → 生成回滚副本 → 原子替换**。校验不通过则不动原库。
+
+回滚副本按版本号命名；同一版本号已存在时自动追加 `-2`、`-3` 序号（最多 50 份，超出报 `FileExistsError`），绝不覆盖上一次的回滚副本——每一份都是「恢复到这一点」的依据，且不会被自动清理。
+
+发布前先用备份 API 把候选库折成一份自洽快照再原子替换，因此候选库 `-wal` 中已提交但尚未 checkpoint 的数据也会并入发布库。
+
+### 环境变量（E4）
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `CP_BACKUP_DIR` | `<数据目录>/backups` | 备份根目录 |
+| `CP_EXPORT_DIR` | `<数据目录>/exports` | 导出预览产物目录 |
+| `CP_BACKUP_ENABLED` | `1` | `0` 关闭每日备份调度 |
+| `CP_BACKUP_INTERVAL_HOURS` | `24` | 备份间隔（小时） |
+
 ## 已知限制（E2 范围外）
 
 - 工作台 / 跨项目人力视图 → E3
-- 导出与恢复 → E4
-- 跨项目依赖、正式写回 vault 需产品单次切换决定
+- 跨项目依赖、正式写回 vault 需产品单次切换决定（E4 只准备精确文件范围/托管区块/备份回滚方案，未切换）
 - E2 只做当前周视图；历史周可查（按周键请求）但无趋势图与批量编辑
+
+### E4 已知限制
+
+- 正式写回 vault（覆盖笔记/脚本）**未启用**：本版只提供导出预览与精确文件范围/托管区块/备份回滚方案，是否切换由产品单次决定。
+- 预览差异只统计新增/修改/删除的行数，不做字段级 diff 展示。
+- 每日备份调度在应用进程内运行；进程不运行时不会有备份，需要靠外部定时任务补位。
+- 备份保留策略未实现：历史备份目录不会自动清理，需人工清理。
+- 本机单用户场景，未做并发写入下的冲突消解（写库仍以单实例运行为前提）。
+- 离线恢复不直接复制候选 `.db` 主文件：发布前先用备份 API 折一份自洽快照（`sqlite3.Connection.backup()`），候选库 `-wal` 中已提交但尚未 checkpoint 的数据会一并并入发布库，事务边界完整，不会丢已提交数据。
+- 备份版本号精确到秒，同一秒内重复触发会自动追加 `-2`、`-3` 序号；并发触发时各自抢不同版本号，发布冲突会自动重试；显式指定版本号的 CLI 仍然拒绝覆盖既有备份。
+- 恢复校验要求候选 `.db` 含当前模型的**全部列**：早于当前版本的备份请走 JSON 恢复路径（按当前模型重建结构）。JSON 恢复还要求导出文件包含当前模型的**全部表**，缺表一律拒绝（避免用不完整的导出清空现库）；**完整但没有任何数据行的导出是合法恢复源**——全新库备份后立即恢复就是这种情形，行数不构成合法性判据。
+- 恢复过程独占库锁：应用仍在运行时恢复会被拒绝，替换期间应用也无法启动。
+- 现库本身已损坏时，回滚副本保存的是原始字节（不是有效 SQLite 快照），恢复仍会继续。
+- 预览环境与正式 QA 容器共用 `pc-52a8eeac-develop-net`，因此 nginx 反代使用专属别名 `cp-develop-backend`；改动 compose 网络时必须保留该别名，否则反代会随机打到其他容器上。该网络声明为 external，compose 只挂接、不重建。

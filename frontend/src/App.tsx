@@ -1,4 +1,5 @@
 import { NavLink, Route, Routes } from "react-router-dom";
+import ExportPage from "./pages/ExportPage";
 import ImportPage from "./pages/ImportPage";
 import PersonPage from "./pages/PersonPage";
 import ProjectDetailPage from "./pages/ProjectDetailPage";
@@ -17,6 +18,7 @@ export default function App() {
           <NavLink to="/workbench">工作台</NavLink>
           <NavLink to="/persons">人员</NavLink>
           <NavLink to="/imports">导入报告</NavLink>
+          <NavLink to="/export">导出预览</NavLink>
         </nav>
       </header>
       <main className="content">
@@ -26,6 +28,7 @@ export default function App() {
           <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="/persons" element={<PersonPage />} />
           <Route path="/imports" element={<ImportPage />} />
+          <Route path="/export" element={<ExportPage />} />
         </Routes>
       </main>
     </div>

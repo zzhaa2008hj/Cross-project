@@ -281,3 +281,33 @@ export interface Meta {
   buffer_sources: string[];
   allocation_supported: boolean;
 }
+
+// E4：导出预览
+export interface ExportDiffTable {
+  added: number;
+  removed: number;
+  changed: number;
+  ids: string[];
+}
+
+export interface ExportDiff {
+  is_first: boolean;
+  tables: Record<string, ExportDiffTable>;
+}
+
+export interface ExportPreview {
+  preview_id: string;
+  generated_at: string;
+  snapshot_id: string;
+  counts: Record<string, number>;
+  diff: ExportDiff;
+  markdown: string;
+  obsidian: string;
+}
+
+export interface ExportPreviewItem {
+  preview_id: string;
+  generated_at: string;
+  snapshot_id: string;
+  counts: Record<string, number>;
+}

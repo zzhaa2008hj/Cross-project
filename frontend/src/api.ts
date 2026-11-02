@@ -1,6 +1,8 @@
 import type {
   Allocation,
   Assignment,
+  ExportPreview,
+  ExportPreviewItem,
   HistoryEntry,
   ImportReport,
   Meta,
@@ -213,4 +215,13 @@ export const api = {
   },
 
   seedDemo: () => request<Project>("/demo/seed", { method: "POST" }),
+
+  // E4：导出预览（只读软件数据库，不写回 vault）
+  createExportPreview: () => request<ExportPreview>("/export/preview", { method: "POST" }),
+  listExportPreviews: () => request<{ items: ExportPreviewItem[] }>("/export/previews"),
 };
+
+/** 预览产物的下载地址：json / markdown / obsidian。 */
+export function exportPreviewUrl(previewId: string, kind: "json" | "markdown" | "obsidian"): string {
+  return `${BASE}/export/previews/${previewId}/${kind}`;
+}

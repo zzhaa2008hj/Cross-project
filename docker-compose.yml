@@ -6,36 +6,45 @@ services:
   backend:
     build:
       context: ./backend
-    image: pc-52a8eeac-backend:${PC_PREVIEW_TAG:-preview}
+    image: pc-52a8eeac-backend:hui211-e4
     container_name: pc-52a8eeac-develop-backend
     restart: unless-stopped
     environment:
       CP_DATA_DIR: /data
       CP_VAULT_DIR: /vault
+      CP_BACKUP_DIR: /backups
+      CP_EXPORT_DIR: /data/exports
       PYTHONUNBUFFERED: "1"
     volumes:
       # SQLite 数据：本项目登记的 Git 外存储（数据卷不随容器隐式删除）
       - type: bind
         source: /home/hui/.local/share/paperclip-project-data/52a8eeac-d442-420e-af14-663ffd7af0ee
         target: /data
+      # 备份目录：落在本项目登记的 Git 外存储，不在 vault 内
+      - type: bind
+        source: /home/hui/.local/share/paperclip-project-data/52a8eeac-d442-420e-af14-663ffd7af0ee/backups
+        target: /backups
       # vault 只读来源（正式写回不在 E1 范围）
       - type: bind
         source: /home/hui/MyData/AI/my-vault
         target: /vault
         read_only: true
     networks:
-      - pc-52a8eeac-develop-net
+      pc-52a8eeac-develop-net:
+        aliases:
+          # 共享网络上 'backend' 别名被 QA 容器占用，这里用专属别名供 nginx 反代
+          - cp-develop-backend
     labels:
       project: "52a8eeac-d442-420e-af14-663ffd7af0ee"
-      issue: "${PC_PREVIEW_ISSUE:-135833e6-18e1-4ed0-9c64-abcd379c33a3}"
+      issue: "${PC_PREVIEW_ISSUE:-89f32463-500a-4445-a05a-b7d7d16194c8}"
       owner: "8769c0b0-acb4-4893-9294-01564a7aef05"
       lifecycle: "preview"
-      version: "${PC_PREVIEW_TAG:-preview}"
+      version: "hui211-e4"
 
   frontend:
     build:
       context: ./frontend
-    image: pc-52a8eeac-frontend:${PC_PREVIEW_TAG:-preview}
+    image: pc-52a8eeac-frontend:hui211-e4
     container_name: pc-52a8eeac-develop-frontend
     restart: unless-stopped
     depends_on:
@@ -47,17 +56,14 @@ services:
       - pc-52a8eeac-develop-net
     labels:
       project: "52a8eeac-d442-420e-af14-663ffd7af0ee"
-      issue: "${PC_PREVIEW_ISSUE:-135833e6-18e1-4ed0-9c64-abcd379c33a3}"
+      issue: "${PC_PREVIEW_ISSUE:-89f32463-500a-4445-a05a-b7d7d16194c8}"
       owner: "8769c0b0-acb4-4893-9294-01564a7aef05"
       lifecycle: "preview"
-      version: "${PC_PREVIEW_TAG:-preview}"
+      version: "hui211-e4"
 
 networks:
+  # 该网络由 E1 建立并被正式 QA 容器（pc-52a8eeac-hui206-qa-backend）共用，
+  # 声明为 external：compose 只挂接，不尝试删除重建，避免影响正在运行的 QA 容器。
   pc-52a8eeac-develop-net:
     name: pc-52a8eeac-develop-net
-    labels:
-      project: "52a8eeac-d442-420e-af14-663ffd7af0ee"
-      issue: "${PC_PREVIEW_ISSUE:-135833e6-18e1-4ed0-9c64-abcd379c33a3}"
-      owner: "8769c0b0-acb4-4893-9294-01564a7aef05"
-      lifecycle: "preview"
-      version: "${PC_PREVIEW_TAG:-preview}"
+    external: true
