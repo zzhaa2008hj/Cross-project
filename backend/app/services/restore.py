@@ -27,6 +27,7 @@ __all__ = [
     "app_lock",
     "lock_path_for",
     "restore_json",
+    "restore_lock",
     "restore_sqlite",
     "validate_sqlite_candidate",
 ]
@@ -74,6 +75,30 @@ def assert_app_stopped(db_path: Path) -> None:
         handle.close()
 
 
+@contextmanager
+def restore_lock(db_path: Path):
+    """恢复期间独占库锁：拿不到锁说明应用仍在运行，恢复立即中止。
+
+    锁在整个"生成回滚副本 → 原子替换"过程中保持，避免应用在替换中途启动。
+    """
+    path = lock_path_for(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "w")
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise RuntimeError(
+                f"应用仍在运行（库锁被占用：{path}），恢复已中止"
+            ) from exc
+        try:
+            yield handle
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
 def _models():
     """延迟导入模型，避免在只需要校验时也拉起整套 ORM。"""
     from .. import models  # noqa: F401  确保模型注册
@@ -83,21 +108,15 @@ def _models():
 
 
 def _required_schema() -> dict[str, set[str]]:
-    """表名 → 必须存在的列（NOT NULL 且没有默认值的列）。
+    """表名 → 必须存在的列（当前模型的全部列）。
 
-    只要求"应用写入时一定提供"的列，避免历史库因为后来新增的可空列被误判。
+    候选库必须能承载当前代码的全部字段：缺列的旧库一旦恢复，应用会在读写时
+    报错。历史版本的备份改走 JSON 恢复路径（按当前模型重建结构）。
     """
     base = _models()
     required: dict[str, set[str]] = {}
     for table in base.metadata.sorted_tables:
-        cols = {
-            column.name
-            for column in table.columns
-            if not column.nullable
-            and column.default is None
-            and column.server_default is None
-        }
-        required[table.name] = cols
+        required[table.name] = {column.name for column in table.columns}
     return required
 
 
@@ -182,10 +201,27 @@ def _publish(new_db: Path, db_path: Path) -> None:
     os.replace(tmp, db_path)
 
 
+def _capture_rollback(db_path: Path, rollback: Path) -> bool:
+    """生成回滚副本；现库已损坏时保留原始字节，不阻断恢复。
+
+    返回回滚副本是否是有效的 SQLite 快照。
+    """
+    if rollback.exists():
+        rollback.unlink()
+    try:
+        snapshot_db(db_path, rollback)
+        return True
+    except sqlite3.DatabaseError:
+        # 现库本身不是有效 SQLite：把原始字节留作回滚依据，继续恢复。
+        shutil.copyfile(db_path, rollback)
+        return False
+
+
 def restore_sqlite(candidate: Path, db_path: Path, stamp: str) -> dict:
     """用一份 SQLite 库恢复现库，保留回滚副本。
 
     候选库必须先通过校验；不通过则抛 ``ValueError``，现库与回滚副本都不动。
+    整个替换过程独占库锁，应用在运行时会直接被拒绝。
     """
     candidate = Path(candidate)
     db_path = Path(db_path)
@@ -193,15 +229,15 @@ def restore_sqlite(candidate: Path, db_path: Path, stamp: str) -> dict:
     if problems:
         raise ValueError("候选库校验未通过：" + "；".join(problems))
 
-    assert_app_stopped(db_path)
-
-    rollback = _rollback_path(db_path, stamp)
-    if rollback.exists():
-        rollback.unlink()
-    snapshot_db(db_path, rollback)
-
-    _publish(candidate, db_path)
-    return {"restored_from": str(candidate), "rollback_path": str(rollback)}
+    with restore_lock(db_path):
+        rollback = _rollback_path(db_path, stamp)
+        rollback_valid = _capture_rollback(db_path, rollback)
+        _publish(candidate, db_path)
+    return {
+        "restored_from": str(candidate),
+        "rollback_path": str(rollback),
+        "rollback_valid": rollback_valid,
+    }
 
 
 def _insert_rows(conn: sqlite3.Connection, table, rows: list[dict]) -> int:
@@ -225,6 +261,7 @@ def restore_json(source: Path, db_path: Path, stamp: str) -> dict:
 
     结构按当前模型定义生成（唯一约束、外键都在），数据来自导出文件。
     导出里出现但模型里没有的表会被跳过——记为已知限制。
+    导出必须包含当前模型的全部表、且至少有一行数据，否则拒绝恢复（避免清空现库）。
     """
     source = Path(source)
     db_path = Path(db_path)
@@ -235,47 +272,58 @@ def restore_json(source: Path, db_path: Path, stamp: str) -> dict:
     if not isinstance(payload, dict) or "tables" not in payload:
         raise ValueError("导出文件缺少 tables 段，不是有效的导出文件")
 
-    assert_app_stopped(db_path)
-
     base = _models()
-    tmp = db_path.parent / f".{db_path.name}.restore-json-{stamp}.tmp"
-    for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
-        if stale.exists():
-            stale.unlink()
-
     tables = base.metadata.sorted_tables
-    engine = create_engine(f"sqlite:///{tmp}")
-    try:
-        base.metadata.create_all(bind=engine)
-    finally:
-        engine.dispose()
+    exported = payload.get("tables")
+    if not isinstance(exported, dict):
+        raise ValueError("导出文件的 tables 段不是对象，不是有效的导出文件")
+    missing_tables = [table.name for table in tables if table.name not in exported]
+    if missing_tables:
+        raise ValueError(
+            "导出文件缺少必需的表：" + "、".join(missing_tables) + "，拒绝恢复（会清空现库）"
+        )
+    if not any(exported.get(table.name) for table in tables):
+        raise ValueError("导出文件没有任何数据行，拒绝恢复（会清空现库）")
 
-    conn = sqlite3.connect(str(tmp))
-    try:
-        conn.execute("PRAGMA foreign_keys=OFF")
-        exported = payload.get("tables") or {}
-        for table in tables:
-            rows = exported.get(table.name) or []
-            _insert_rows(conn, table, rows)
-        conn.commit()
-        problems = validate_sqlite_candidate(tmp)
-    finally:
-        conn.close()
-
-    if problems:
+    with restore_lock(db_path):
+        tmp = db_path.parent / f".{db_path.name}.restore-json-{stamp}.tmp"
         for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
             if stale.exists():
                 stale.unlink()
-        raise ValueError("重建后的库校验未通过：" + "；".join(problems))
 
-    rollback = _rollback_path(db_path, stamp)
-    if rollback.exists():
-        rollback.unlink()
-    snapshot_db(db_path, rollback)
+        engine = create_engine(f"sqlite:///{tmp}")
+        try:
+            base.metadata.create_all(bind=engine)
+        finally:
+            engine.dispose()
 
-    _publish(tmp, db_path)
-    for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
-        if stale.exists():
-            stale.unlink()
+        conn = sqlite3.connect(str(tmp))
+        try:
+            conn.execute("PRAGMA foreign_keys=OFF")
+            for table in tables:
+                rows = exported.get(table.name) or []
+                _insert_rows(conn, table, rows)
+            conn.commit()
+            problems = validate_sqlite_candidate(tmp)
+        finally:
+            conn.close()
 
-    return {"restored_from": str(source), "rollback_path": str(rollback)}
+        if problems:
+            for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
+                if stale.exists():
+                    stale.unlink()
+            raise ValueError("重建后的库校验未通过：" + "；".join(problems))
+
+        rollback = _rollback_path(db_path, stamp)
+        rollback_valid = _capture_rollback(db_path, rollback)
+
+        _publish(tmp, db_path)
+        for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
+            if stale.exists():
+                stale.unlink()
+
+    return {
+        "restored_from": str(source),
+        "rollback_path": str(rollback),
+        "rollback_valid": rollback_valid,
+    }

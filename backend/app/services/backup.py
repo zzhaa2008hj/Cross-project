@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,7 +16,14 @@ from ..config import data_dir
 from .export import build_export, render_markdown, render_obsidian_summary
 from .snapshot import snapshot_db
 
-__all__ = ["backup_root", "run_backup", "safe_join", "default_stamp", "next_free_stamp"]
+__all__ = [
+    "backup_root",
+    "run_backup",
+    "run_backup_auto",
+    "safe_join",
+    "default_stamp",
+    "next_free_stamp",
+]
 
 DB_NAME = "crossproject.db"
 JSON_NAME = "export.json"
@@ -66,7 +74,10 @@ def safe_join(base: Path, *parts: str) -> Path:
 
 
 def run_backup(db_path: Path, backup_root: Path, stamp: str | None = None) -> dict:
-    """做一次一致性备份并原子发布，返回备份摘要。"""
+    """做一次一致性备份并原子发布，返回备份摘要。
+
+    版本号已存在时抛 ``FileExistsError``，绝不覆盖既有备份。
+    """
     stamp = stamp or default_stamp()
     db_path = Path(db_path)
     root = Path(backup_root)
@@ -76,9 +87,8 @@ def run_backup(db_path: Path, backup_root: Path, stamp: str | None = None) -> di
     if published.exists():
         raise FileExistsError(f"备份版本已存在，拒绝覆盖：{published}")
 
-    staging = safe_join(root, f".staging-{stamp}")
-    if staging.exists():
-        shutil.rmtree(staging)
+    # staging 目录必须唯一：并发备份各自建目录，互不干扰。
+    staging = safe_join(root, f".staging-{stamp}-{uuid.uuid4().hex}")
     staging.mkdir(parents=True)
 
     try:
@@ -94,7 +104,11 @@ def run_backup(db_path: Path, backup_root: Path, stamp: str | None = None) -> di
         (staging / OBSIDIAN_NAME).write_text(
             render_obsidian_summary(export), encoding="utf-8"
         )
-        os.replace(staging, published)
+        try:
+            os.replace(staging, published)
+        except OSError as exc:
+            # 并发备份里另一个进程已经发布了同一个版本号。
+            raise FileExistsError(f"备份版本已存在，拒绝覆盖：{published}") from exc
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -108,3 +122,23 @@ def run_backup(db_path: Path, backup_root: Path, stamp: str | None = None) -> di
         "counts": export["counts"],
         "snapshot_id": export["snapshot_id"],
     }
+
+
+def run_backup_auto(
+    db_path: Path, backup_root: Path, base: str | None = None, max_attempts: int = 50
+) -> dict:
+    """做一次一致性备份；版本号被占用时自动顺延序号重试。
+
+    并发调用时各自抢不同的版本号：发布失败说明版本已被别人占用，
+    重新挑一个空闲号再试，直到拿到一个完整发布的版本。
+    """
+    root = Path(backup_root)
+    root.mkdir(parents=True, exist_ok=True)
+    base_stamp = base or default_stamp()
+    candidate = next_free_stamp(root, base_stamp)
+    for _ in range(max_attempts):
+        try:
+            return run_backup(db_path, root, candidate)
+        except FileExistsError:
+            candidate = next_free_stamp(root, base_stamp)
+    raise FileExistsError(f"备份版本号过多，已放弃：{base_stamp}")

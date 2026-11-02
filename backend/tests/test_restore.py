@@ -207,3 +207,92 @@ def test_cli_restore_reports_failure_with_nonzero_exit(tmp_path):
 
     assert result.returncode != 0
     assert result.stderr.strip()
+
+
+def test_validate_sqlite_candidate_rejects_missing_model_columns(tmp_path):
+    """缺列的候选库（如旧版本备份）必须被拒绝：应用按当前模型查询会直接报错。"""
+    path = _make_db(tmp_path / "old.db")
+    conn = sqlite3.connect(str(path))
+    conn.execute("ALTER TABLE projects DROP COLUMN state")
+    conn.commit()
+    conn.close()
+
+    problems = validate_sqlite_candidate(path)
+
+    assert any("state" in problem for problem in problems)
+
+
+def test_restore_holds_db_lock_throughout_replacement(tmp_path, monkeypatch):
+    """恢复全程独占库锁：替换过程中应用不得启动、另一个恢复也不得并发进入。"""
+    import fcntl
+
+    from app.services import restore as restore_service
+
+    live = _make_db(tmp_path / "live.db", name="现库")
+    candidate = _make_db(tmp_path / "candidate.db", name="备份库")
+    original = restore_service.snapshot_db
+    observed: dict[str, bool] = {}
+
+    def probing_snapshot(source, dest):
+        result = original(source, dest)
+        handle = open(restore_service.lock_path_for(Path(source)), "w")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            observed["lock_available"] = True
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        except OSError:
+            observed["lock_available"] = False
+        finally:
+            handle.close()
+        return result
+
+    monkeypatch.setattr(restore_service, "snapshot_db", probing_snapshot)
+
+    restore_sqlite(candidate, live, stamp="20261102T000000Z")
+
+    assert observed["lock_available"] is False
+
+
+def test_restore_json_rejects_export_without_any_rows(tmp_path):
+    """空导出（所有表都没有数据行）会清空现库，必须拒绝。"""
+    live = _make_db(tmp_path / "live.db", name="现库")
+    from app.db import Base
+
+    payload = {
+        "schema_version": 1,
+        "tables": {table.name: [] for table in Base.metadata.sorted_tables},
+    }
+    source = tmp_path / "export.json"
+    source.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        restore_json(source, live, stamp="20261102T000000Z")
+
+    assert _dump(live) == [(1, "现库", "active")]
+
+
+def test_restore_json_rejects_export_missing_model_tables(tmp_path):
+    """导出缺少模型表（不完整导出）必须拒绝，不能用空表重建现库。"""
+    live = _make_db(tmp_path / "live.db", name="现库")
+    payload = {"schema_version": 1, "tables": {"projects": []}}
+    source = tmp_path / "export.json"
+    source.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        restore_json(source, live, stamp="20261102T000000Z")
+
+    assert _dump(live) == [(1, "现库", "active")]
+
+
+def test_restore_sqlite_succeeds_when_live_db_is_corrupt(tmp_path):
+    """现库损坏时，有效备份仍应能恢复；损坏原文件保留为回退副本。"""
+    live = tmp_path / "live.db"
+    live.write_bytes(b"this is definitely not a sqlite database")
+    candidate = _make_db(tmp_path / "candidate.db", name="备份库")
+
+    result = restore_sqlite(candidate, live, stamp="20261102T000000Z")
+
+    assert _dump(live) == [(1, "备份库", "active")]
+    rollback = Path(result["rollback_path"])
+    assert rollback.exists()
+    assert rollback.read_bytes() == b"this is definitely not a sqlite database"

@@ -113,3 +113,105 @@ def test_backup_root_is_outside_vault(tmp_path, monkeypatch):
     root = backup_root().resolve()
     assert vault.resolve() not in root.parents
     assert root != vault.resolve()
+
+
+def test_concurrent_backups_with_same_stamp_publish_exactly_once(tmp_path, monkeypatch):
+    """同一版本号的并发备份：只能有一份发布成功，另一份必须报"版本已存在"。"""
+    import threading
+    import time
+
+    db = _seed_db(tmp_path / "src.db")
+    root = tmp_path / "backups"
+    original = backup_service.snapshot_db
+    barrier = threading.Barrier(2, timeout=10)
+
+    def slow_snapshot(source, dest):
+        barrier.wait()
+        time.sleep(0.05)
+        return original(source, dest)
+
+    monkeypatch.setattr(backup_service, "snapshot_db", slow_snapshot)
+
+    results: list[dict] = []
+    errors: list[Exception] = []
+
+    def worker() -> None:
+        try:
+            results.append(run_backup(db, root, stamp="20261102T000000Z"))
+        except Exception as exc:  # noqa: BLE001  测试要看到具体异常类型
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert len(results) == 1
+    assert len(errors) == 1
+    assert isinstance(errors[0], FileExistsError)
+
+    published = root / "20261102T000000Z"
+    assert sorted(p.name for p in published.iterdir()) == [
+        "crossproject.db",
+        "export.json",
+        "export.md",
+        "obsidian.md",
+    ]
+    conn = sqlite3.connect(published / "crossproject.db")
+    rows = conn.execute("SELECT name FROM projects").fetchall()
+    conn.close()
+    assert rows == [("甲项目",)]
+
+
+def test_run_backup_auto_uses_free_stamp_when_version_taken(tmp_path):
+    """自动挑版本号：版本已被占用时顺延，而不是直接失败。"""
+    db = _seed_db(tmp_path / "src.db")
+    root = tmp_path / "backups"
+
+    first = backup_service.run_backup_auto(db, root, base="20261102T000000Z")
+    second = backup_service.run_backup_auto(db, root, base="20261102T000000Z")
+
+    assert first["stamp"] == "20261102T000000Z"
+    assert second["stamp"] != first["stamp"]
+    assert (root / second["stamp"] / "export.json").exists()
+
+
+def test_concurrent_auto_backups_get_distinct_complete_versions(tmp_path):
+    """并发自动备份：版本号互不相同，每份产物都完整。"""
+    import threading
+
+    db = _seed_db(tmp_path / "src.db")
+    root = tmp_path / "backups"
+    results: list[dict] = []
+    errors: list[Exception] = []
+    barrier = threading.Barrier(4, timeout=10)
+
+    def worker() -> None:
+        try:
+            barrier.wait()
+            results.append(backup_service.run_backup_auto(db, root, base="20261102T000000Z"))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert errors == []
+    stamps = [item["stamp"] for item in results]
+    assert len(set(stamps)) == 4
+    for stamp in stamps:
+        published = root / stamp
+        assert sorted(p.name for p in published.iterdir()) == [
+            "crossproject.db",
+            "export.json",
+            "export.md",
+            "obsidian.md",
+        ]
+        conn = sqlite3.connect(published / "crossproject.db")
+        rows = conn.execute("SELECT name FROM projects").fetchall()
+        conn.close()
+        assert rows == [("甲项目",)]

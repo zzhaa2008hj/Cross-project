@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from .config import db_path, exports_dir
-from .services.backup import backup_root, default_stamp, next_free_stamp, run_backup
+from .services.backup import backup_root, default_stamp, run_backup_auto
 from .services.export import (
     build_export,
     diff_exports,
@@ -28,7 +28,7 @@ __all__ = ["router"]
 
 router = APIRouter()
 
-_PREVIEW_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_PREVIEW_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _MAX_INDEX_ITEMS = 20
 _JSON_NAME = "export.json"
 _MARKDOWN_NAME = "export.md"
@@ -132,10 +132,18 @@ def create_preview() -> dict:
 
 
 def _preview_folder(preview_id: str) -> Path:
+    """定位预览目录：编号合法、不是符号链接、且确实在导出目录内。"""
     if not _PREVIEW_ID_RE.match(preview_id or ""):
         raise HTTPException(status_code=404, detail="预览不存在")
     folder = exports_dir() / preview_id
-    if not folder.is_dir():
+    if folder.is_symlink() or not folder.is_dir():
+        raise HTTPException(status_code=404, detail="预览不存在")
+    root = exports_dir().resolve()
+    try:
+        resolved = folder.resolve()
+    except OSError:
+        raise HTTPException(status_code=404, detail="预览不存在") from None
+    if resolved != root and root not in resolved.parents:
         raise HTTPException(status_code=404, detail="预览不存在")
     return folder
 
@@ -186,7 +194,6 @@ def post_backup_run() -> dict:
     """
     root = backup_root()
     try:
-        stamp = next_free_stamp(root, default_stamp())
-        return run_backup(db_path(), root, stamp)
+        return run_backup_auto(db_path(), root, default_stamp())
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

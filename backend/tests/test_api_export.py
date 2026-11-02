@@ -121,3 +121,39 @@ def test_backup_run_endpoint_repeated_in_same_second_still_succeeds(client, expo
     published = [p for p in (export_env / "backups").iterdir() if p.is_dir()]
     assert len(published) == 2
     assert all((p / "crossproject.db").exists() for p in published)
+
+
+def test_preview_id_parent_traversal_returns_404(client, export_env):
+    """preview_id 为 ".." 时不得读到导出目录之外的同名文件。"""
+    (export_env / "export.json").write_text("{\"leaked\": true}", encoding="utf-8")
+
+    resp = client.get("/api/export/previews/%2E%2E/json")
+
+    assert resp.status_code == 404
+
+
+def test_preview_folder_rejects_symlink_escape(client, export_env, tmp_path):
+    """导出目录里的符号链接不得成为预览产物的读取入口。"""
+    exports = export_env / "exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "export.json").write_text("{\"leaked\": true}", encoding="utf-8")
+    (exports / "evil").symlink_to(outside, target_is_directory=True)
+
+    resp = client.get("/api/export/previews/evil/json")
+
+    assert resp.status_code == 404
+
+
+def test_preview_folder_rejects_parent_and_dot_ids(export_env):
+    """``..`` 与 ``.`` 这类编号不得被当成预览目录。"""
+    from fastapi import HTTPException
+
+    from app.api_export import _preview_folder
+
+    (export_env / "exports").mkdir(parents=True, exist_ok=True)
+    for preview_id in ("..", ".", "../.."):
+        with pytest.raises(HTTPException) as excinfo:
+            _preview_folder(preview_id)
+        assert excinfo.value.status_code == 404

@@ -36,11 +36,12 @@ _lock_stack = ExitStack()
 
 @app.on_event("startup")
 def _startup() -> None:
-    init_db()
+    # 先取库锁再初始化：避免第二个实例在初始化阶段动库。
     try:
         _lock_stack.enter_context(app_lock(db_path()))
     except OSError as exc:
         raise RuntimeError(f"无法取得数据库锁，可能已有实例在运行：{exc}") from exc
+    init_db()
     start_backup_scheduler()
 
 
