@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import PersonPage from "./PersonPage";
 
 const listPersons = vi.fn();
@@ -90,7 +91,11 @@ afterEach(() => {
 describe("人员页", () => {
   it("列出人员并显示其周视图", async () => {
     setup();
-    render(<PersonPage />);
+    render(
+      <MemoryRouter>
+        <PersonPage />
+      </MemoryRouter>,
+    );
     await waitFor(() => expect(screen.getByText("傅相杰")).toBeTruthy());
     expect(screen.getByText("文磊")).toBeTruthy();
     await waitFor(() => expect(screen.getByText(/本周占用 3 人天/)).toBeTruthy());
@@ -98,21 +103,33 @@ describe("人员页", () => {
 
   it("显示人员的能力标签与默认周容量", async () => {
     setup();
-    render(<PersonPage />);
+    render(
+      <MemoryRouter>
+        <PersonPage />
+      </MemoryRouter>,
+    );
     await waitFor(() => expect(screen.getByText("傅相杰")).toBeTruthy());
     expect(screen.getByText("地质AI")).toBeTruthy();
   });
 
   it("接口失败时显示错误信息", async () => {
     listPersons.mockRejectedValue(new Error("人员列表读取失败"));
-    render(<PersonPage />);
+    render(
+      <MemoryRouter>
+        <PersonPage />
+      </MemoryRouter>,
+    );
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("人员列表读取失败"));
   });
 
   it("保存资料失败时保留已填值", async () => {
     setup();
     updatePerson.mockRejectedValue(new Error("姓名重复"));
-    render(<PersonPage />);
+    render(
+      <MemoryRouter>
+        <PersonPage />
+      </MemoryRouter>,
+    );
     await waitFor(() => expect(screen.getByText("傅相杰")).toBeTruthy());
     const input = screen.getByLabelText("能力标签") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "地质AI、遥感" } });
@@ -129,7 +146,11 @@ describe("人员页", () => {
       project_id: 1,
       role: "业务对接",
     });
-    render(<PersonPage />);
+    render(
+      <MemoryRouter>
+        <PersonPage />
+      </MemoryRouter>,
+    );
     await waitFor(() => expect(screen.getByText("傅相杰")).toBeTruthy());
     fireEvent.change(screen.getByLabelText("职责项目"), { target: { value: "1" } });
     fireEvent.change(screen.getByLabelText("职责角色"), { target: { value: "业务对接" } });
@@ -146,7 +167,11 @@ describe("人员页", () => {
 
   it("职责角色覆盖四类标准角色", async () => {
     setup();
-    render(<PersonPage />);
+    render(
+      <MemoryRouter>
+        <PersonPage />
+      </MemoryRouter>,
+    );
     await waitFor(() => expect(screen.getByText("傅相杰")).toBeTruthy());
     const roles = screen.getByLabelText("职责角色") as HTMLSelectElement;
     const values = Array.from(roles.options).map((o) => o.value);

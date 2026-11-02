@@ -47,12 +47,14 @@ from .schemas import (
     RescheduleRequest,
     WeekCapacityUpdate,
     WeekReviewUpdate,
+    WorkbenchOut,
 )
 from .services import buffer as buffer_service
 from .services import history as history_service
 from .services import importer as importer_service
 from .services import reschedule as reschedule_service
 from .services import weekly as weekly_service
+from .services import workbench as workbench_service
 
 router = APIRouter(prefix="/api")
 
@@ -980,3 +982,23 @@ def delete_allocation(allocation_id: int, db: Session = Depends(get_db)):
     weekly_service.reset_review(db, person_id, week)
     db.commit()
     return {"deleted": allocation_id}
+
+
+# ------------------------------------------------------------------ E3 工作台
+
+
+@router.get("/workbench", response_model=WorkbenchOut)
+def get_workbench(
+    week: date | None = None,
+    project_id: int | None = None,
+    owner_person_id: int | None = None,
+    db: Session = Depends(get_db),
+):
+    """工作台汇总。只读；过滤只决定项目与人员范围，不裁剪人员占用与合计。"""
+    selected = week if week is not None else weekly_service.current_week(
+        workbench_service.today_shanghai()
+    )
+    _require_week(selected)
+    return workbench_service.build_workbench(
+        db, selected, project_id=project_id, owner_person_id=owner_person_id
+    )

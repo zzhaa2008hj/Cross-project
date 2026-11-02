@@ -468,3 +468,96 @@ class PersonWeekOut(BaseModel):
     assignments: list[AssignmentOut] = []
     unallocated_milestones: list[MilestoneBrief] = []
     status_text: str = ""
+
+
+# ------------------------------------------------------------------ E3 工作台
+
+
+class WorkbenchTodoItem(BaseModel):
+    """工作台待处理事项。kind: overdue/due_soon/blocked/unassigned/missing_allocation/capacity/review。"""
+
+    kind: str
+    project_id: int | None = None
+    project_name: str | None = None
+    project_state: str | None = None
+    milestone_id: int | None = None
+    milestone_name: str | None = None
+    person_id: int | None = None
+    person_name: str | None = None
+    due_date: date | None = None
+    week_label: str = ""
+    detail: str = ""
+
+
+class WorkbenchMilestone(BaseModel):
+    """项目下的节点概要，带逾期/本周到期/阻塞标记。"""
+
+    id: int
+    name: str
+    state: str
+    commit_date: date | None = None
+    start_date: date | None = None
+    assignee_id: int | None = None
+    assignee_name: str | None = None
+    overdue: bool = False
+    due_this_week: bool = False
+    blocked: bool = False
+
+
+class WorkbenchProject(BaseModel):
+    """工作台项目行。maintenance 项目只在维护区出现。"""
+
+    id: int
+    name: str
+    state: str
+    on_hold: bool = False
+    priority: str = ""
+    priority_rank: int = 99
+    current_focus_milestone_id: int | None = None
+    current_focus_name: str | None = None
+    allocation_days: float = 0.0
+    overdue_count: int = 0
+    blocked_count: int = 0
+    due_soon_count: int = 0
+    milestones: list[WorkbenchMilestone] = []
+
+
+class WorkbenchConflict(BaseModel):
+    """某人在某一周按项目归并的占用来源。"""
+
+    project_id: int
+    project_name: str | None = None
+    project_state: str | None = None
+    days: float = 0.0
+    allocations: list[AllocationOut] = []
+
+
+class WorkbenchPerson(BaseModel):
+    """人员卡：与人员页同一份占用数据，不受工作台过滤裁剪。"""
+
+    person_id: int
+    name: str
+    capacity: float | None = None
+    capacity_source: str = "default"
+    total_days: float = 0.0
+    over_days: float | None = None
+    remaining_days: float | None = None
+    reviewed: bool = False
+    status_text: str = ""
+    assignments: list[AssignmentOut] = []
+    allocations: list[AllocationOut] = []
+    unallocated_milestones: list[MilestoneBrief] = []
+    conflicts: list[WorkbenchConflict] = []
+
+
+class WorkbenchOut(BaseModel):
+    """工作台汇总视图：工作台、项目页、人员页共用同一份占用口径。"""
+
+    week: date
+    week_end: date
+    today: date
+    projects: list[WorkbenchProject] = []
+    maintenance_projects: list[WorkbenchProject] = []
+    people: list[WorkbenchPerson] = []
+    todos: list[WorkbenchTodoItem] = []
+    has_pending: bool = False

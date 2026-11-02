@@ -12,7 +12,8 @@ import MilestoneForm, {
 import RescheduleDialog from "../components/RescheduleDialog";
 import WeekPanel from "../components/WeekPanel";
 import { EmptyState, ErrorBanner, Field, Loading } from "../components/common";
-import { currentWeek } from "../week";
+import { currentWeek, shiftWeek, weekEnd } from "../week";
+import { useWeekParam } from "../useWeekParam";
 import {
   PROJECT_STATE_LABEL,
   bufferWarnings,
@@ -44,7 +45,7 @@ export default function ProjectDetailPage() {
   // E2：本项目的周投入分配与项目职责。分配是唯一占用来源，与人员页共用同一份数据。
   const [allocations, setAllocations] = useState<Allocation[]>([]);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
-  const week = currentWeek();
+  const [week, setWeek] = useWeekParam();
 
   const loadWeekly = useCallback(async () => {
     try {
@@ -62,6 +63,14 @@ export default function ProjectDetailPage() {
 
   useEffect(() => {
     void loadWeekly();
+  }, [loadWeekly]);
+
+  /**
+   * 人员卡里新增/修改/删除周投入分配后，父页的项目分配列表与相关人员周合计
+   * 必须立即同步，不靠刷新页面纠正。
+   */
+  const handleAllocationChange = useCallback(async () => {
+    await loadWeekly();
   }, [loadWeekly]);
 
   /** 与本项目相关的人：项目内分配、项目职责、节点执行人。 */
@@ -413,6 +422,20 @@ export default function ProjectDetailPage() {
 
       <div className="card">
         <h3>周投入分配</h3>
+        <div className="row" role="group" aria-label="周选择">
+          <button type="button" onClick={() => setWeek(shiftWeek(week, -1))}>
+            上一周
+          </button>
+          <button type="button" onClick={() => setWeek(currentWeek())}>
+            本周
+          </button>
+          <button type="button" onClick={() => setWeek(shiftWeek(week, 1))}>
+            下一周
+          </button>
+          <span className="muted">
+            周区间 {week} ~ {weekEnd(week)}
+          </span>
+        </div>
         <p className="muted">
           与人员页同一份 Allocation：同一分配 ID 只计一次占用，下方每个人的周视图会同时列出其
           其他项目的冲突分配。
@@ -447,6 +470,7 @@ export default function ProjectDetailPage() {
             week={week}
             focusProjectId={pid}
             personName={p?.name ?? null}
+            onAllocationChange={handleAllocationChange}
           />
         );
       })}

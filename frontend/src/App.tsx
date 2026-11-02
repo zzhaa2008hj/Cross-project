@@ -3,6 +3,7 @@ import ImportPage from "./pages/ImportPage";
 import PersonPage from "./pages/PersonPage";
 import ProjectDetailPage from "./pages/ProjectDetailPage";
 import ProjectListPage from "./pages/ProjectListPage";
+import WorkbenchPage from "./pages/WorkbenchPage";
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
           <NavLink to="/" end>
             项目
           </NavLink>
+          <NavLink to="/workbench">工作台</NavLink>
           <NavLink to="/persons">人员</NavLink>
           <NavLink to="/imports">导入报告</NavLink>
         </nav>
@@ -20,6 +22,7 @@ export default function App() {
       <main className="content">
         <Routes>
           <Route path="/" element={<ProjectListPage />} />
+          <Route path="/workbench" element={<WorkbenchPage />} />
           <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="/persons" element={<PersonPage />} />
           <Route path="/imports" element={<ImportPage />} />

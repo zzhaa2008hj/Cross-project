@@ -9,6 +9,7 @@ import type {
   PersonWeek,
   Project,
   ReschedulePreview,
+  Workbench,
 } from "./types";
 
 const BASE = "/api";
@@ -148,6 +149,22 @@ export const api = {
   // E2：人员周视图、容量覆盖与显式核对
   getPersonWeek: (personId: number, week: string) =>
     request<PersonWeek>(`/persons/${personId}/weeks/${week}`),
+
+  // E3：工作台汇总（只读；过滤只决定项目与人员范围）
+  getWorkbench: (params: {
+    week?: string;
+    project_id?: number;
+    owner_person_id?: number;
+  } = {}) => {
+    const q = new URLSearchParams();
+    if (params.week) q.set("week", params.week);
+    if (params.project_id !== undefined) q.set("project_id", String(params.project_id));
+    if (params.owner_person_id !== undefined) {
+      q.set("owner_person_id", String(params.owner_person_id));
+    }
+    const qs = q.toString();
+    return request<Workbench>(`/workbench${qs ? `?${qs}` : ""}`);
+  },
   setWeekCapacity: (personId: number, week: string, days: number | null) =>
     request<PersonWeek>(`/persons/${personId}/weeks/${week}/capacity`, {
       method: "PUT",

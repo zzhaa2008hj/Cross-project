@@ -97,6 +97,35 @@ body {
   margin-bottom: 16px;
 }
 
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 16px;
+  margin-bottom: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-head h3 {
+  margin: 0;
+}
+
 .card h3 {
   margin: 0 0 12px;
   font-size: 15px;
@@ -313,6 +342,16 @@ button.link,
   color: var(--warn);
   border-radius: 3px;
   padding: 1px 6px;
+}
+
+.tag-warn {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.tag-info {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .warn {

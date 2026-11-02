@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { EmptyState, ErrorBanner, Field, Loading, errorMessage } from "../components/common";
 import WeekPanel from "../components/WeekPanel";
-import { currentWeek } from "../week";
+import { currentWeek, shiftWeek, weekEnd } from "../week";
+import { useWeekParam } from "../useWeekParam";
 import type { Assignment, Person, Project } from "../types";
 
 /** 项目职责的标准角色。职责只表达角色，不计入任何占用。 */
@@ -44,20 +46,29 @@ export default function PersonPage() {
   const [assignmentProject, setAssignmentProject] = useState("");
   const [assignmentRole, setAssignmentRole] = useState(ASSIGNMENT_ROLES[0]);
 
-  const week = currentWeek();
+  const [week, setWeek] = useWeekParam();
+  const [searchParams] = useSearchParams();
+  const preselected = searchParams.get("person");
 
   const loadPersons = useCallback(async () => {
     setError(null);
     try {
       const rows = await api.listPersons();
       setPersons(rows);
-      setSelectedId((prev) => prev ?? (rows[0]?.id ?? null));
+      setSelectedId((prev) => {
+        // 从工作台跳转过来时按 URL 指定的人员打开。
+        if (preselected) {
+          const target = rows.find((r) => String(r.id) === preselected);
+          if (target) return target.id;
+        }
+        return prev ?? (rows[0]?.id ?? null);
+      });
     } catch (e) {
       setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [preselected]);
 
   useEffect(() => {
     void loadPersons();
@@ -246,7 +257,24 @@ export default function PersonPage() {
             </div>
           </div>
 
-          <WeekPanel personId={selected.id} week={week} />
+          <div className="card">
+            <h3>周投入分配</h3>
+            <div className="row" role="group" aria-label="周选择">
+              <button type="button" onClick={() => setWeek(shiftWeek(week, -1))}>
+                上一周
+              </button>
+              <button type="button" onClick={() => setWeek(currentWeek())}>
+                本周
+              </button>
+              <button type="button" onClick={() => setWeek(shiftWeek(week, 1))}>
+                下一周
+              </button>
+              <span className="muted">
+                周区间 {week} ~ {weekEnd(week)}
+              </span>
+            </div>
+            <WeekPanel personId={selected.id} week={week} />
+          </div>
         </>
       ) : null}
     </div>
