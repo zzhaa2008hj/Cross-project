@@ -1,16 +1,19 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { EmptyState, ErrorBanner, Field, Loading, errorMessage } from "../components/common";
 import { projectStateLabel } from "../labels";
-import { currentWeek, shiftWeek } from "../week";
+import { currentWeek, shiftWeek, weekEnd } from "../week";
+import { useWeekParam } from "../useWeekParam";
 import type { Person, Project, Workbench, WorkbenchProject } from "../types";
 
 /** 待处理事项的类别标签。顺序与后端一致：异常在前，待补数据在后。 */
 export const TODO_KIND_LABEL: Record<string, string> = {
   overdue: "逾期",
   blocked: "阻塞",
+  over_capacity: "超出容量",
   due_soon: "临近交付",
   unassigned: "待分派",
+  missing_date: "缺承诺日期",
   missing_allocation: "待填投入",
   capacity: "容量待确认",
   review: "待核对",
@@ -70,7 +73,7 @@ function ProjectCard({
  * 只读；过滤只决定项目与人员范围，人员占用与合计始终保持完整。
  */
 export default function WorkbenchPage() {
-  const [week, setWeek] = useState<string>(() => currentWeek());
+  const [week, setWeek] = useWeekParam();
   const [projectFilter, setProjectFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [data, setData] = useState<Workbench | null>(null);
@@ -79,6 +82,8 @@ export default function WorkbenchPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<number[]>([]);
+  // 请求序号：只有最后一次请求的结果才允许渲染，避免旧响应覆盖新周的数据。
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     api.listProjects().then(setProjects).catch(() => undefined);
@@ -86,6 +91,7 @@ export default function WorkbenchPage() {
   }, []);
 
   const load = useCallback(async () => {
+    const seq = ++requestSeq.current;
     setError(null);
     try {
       const params: {
@@ -95,12 +101,15 @@ export default function WorkbenchPage() {
       } = { week };
       if (projectFilter) params.project_id = Number(projectFilter);
       if (ownerFilter) params.owner_person_id = Number(ownerFilter);
-      setData(await api.getWorkbench(params));
+      const next = await api.getWorkbench(params);
+      if (seq !== requestSeq.current) return; // 过期响应，丢弃
+      setData(next);
     } catch (e) {
+      if (seq !== requestSeq.current) return; // 过期响应，丢弃
       setError(errorMessage(e));
       setData(null);
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   }, [week, projectFilter, ownerFilter]);
 
@@ -114,16 +123,15 @@ export default function WorkbenchPage() {
     );
 
   const weekLabel = useMemo(() => {
-    if (!data) return `${week} ~ ${shiftWeek(week, 6)}`;
+    if (!data) return `${week} ~ ${weekEnd(week)}`;
     return `${data.week} ~ ${data.week_end}`;
   }, [data, week]);
-
-  if (loading) return <Loading text="加载工作台…" />;
 
   return (
     <section className="page">
       <h1>工作台</h1>
       <ErrorBanner error={error} />
+      {loading && !data ? <Loading text="加载工作台…" /> : null}
 
       <div className="filters">
         <Field label="周">
@@ -184,9 +192,9 @@ export default function WorkbenchPage() {
               </li>
             ))}
           </ul>
-        ) : (
+        ) : data ? (
           <EmptyState text="当前没有待处理事项" />
-        )}
+        ) : null}
       </section>
 
       <section aria-label="项目">
@@ -201,9 +209,9 @@ export default function WorkbenchPage() {
               onToggle={() => toggle(p.id)}
             />
           ))
-        ) : (
+        ) : data ? (
           <EmptyState text="当前范围内没有项目" />
-        )}
+        ) : null}
       </section>
 
       <section aria-label="维护项目">
@@ -218,9 +226,9 @@ export default function WorkbenchPage() {
               onToggle={() => toggle(p.id)}
             />
           ))
-        ) : (
+        ) : data ? (
           <EmptyState text="当前没有维护期项目" />
-        )}
+        ) : null}
       </section>
 
       <section aria-label="人员安排">
@@ -259,9 +267,9 @@ export default function WorkbenchPage() {
               </ul>
             </article>
           ))
-        ) : (
+        ) : data ? (
           <EmptyState text="当前范围内没有人员" />
-        )}
+        ) : null}
       </section>
     </section>
   );

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkbenchPage from "./WorkbenchPage";
 
@@ -78,8 +79,21 @@ function board(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function renderPage() {
-  return render(<WorkbenchPage />);
+function renderPage(url = "/") {
+  return render(
+    <MemoryRouter initialEntries={[url]}>
+      <WorkbenchPage />
+    </MemoryRouter>,
+  );
+}
+
+/** 可手动兑现的 Promise，用于模拟乱序返回的请求。 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 describe("工作台页", () => {
@@ -266,5 +280,45 @@ describe("工作台页", () => {
         expect.objectContaining({ project_id: 1 }),
       ),
     );
+  });
+
+  it("沿用 URL 上的周参数，与项目页、人员页同源", async () => {
+    getWorkbench.mockResolvedValue(board({ week: "2026-11-09", week_end: "2026-11-15" }));
+    renderPage("/?week=2026-11-09");
+    await waitFor(() =>
+      expect(getWorkbench).toHaveBeenCalledWith(expect.objectContaining({ week: "2026-11-09" })),
+    );
+    expect(await screen.findByText("周区间 2026-11-09 ~ 2026-11-15")).toBeTruthy();
+  });
+
+  it("切换周后丢弃过期响应，只渲染最后一次结果", async () => {
+    const first = deferred<ReturnType<typeof board>>();
+    const second = deferred<ReturnType<typeof board>>();
+    getWorkbench.mockImplementationOnce(() => first.promise);
+    getWorkbench.mockImplementationOnce(() => second.promise);
+    renderPage("/?week=2026-11-02");
+    await waitFor(() => expect(getWorkbench).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "下一周" }));
+    await waitFor(() => expect(getWorkbench).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      second.resolve(
+        board({ week: "2026-11-09", week_end: "2026-11-15", projects: [project({ name: "第二周项目" })] }),
+      );
+    });
+    expect(await screen.findByText("第二周项目")).toBeTruthy();
+    await act(async () => {
+      first.resolve(
+        board({ week: "2026-11-02", week_end: "2026-11-08", projects: [project({ name: "第一周项目" })] }),
+      );
+    });
+    expect(screen.queryByText("第一周项目")).toBeNull();
+    expect(screen.getByText("第二周项目")).toBeTruthy();
+  });
+
+  it("接口失败时显示错误，且不显示没有待处理事项", async () => {
+    getWorkbench.mockRejectedValue(new Error("boom"));
+    renderPage();
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.queryByText("当前没有待处理事项")).toBeNull();
   });
 });

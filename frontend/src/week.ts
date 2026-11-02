@@ -30,3 +30,10 @@ export function shiftWeek(week: string, delta: number): string {
   d.setUTCDate(d.getUTCDate() + delta * 7);
   return d.toISOString().slice(0, 10);
 }
+
+/** 该周的周日（周键 + 6 天）。周区间展示用，不是下一个周键。 */
+export function weekEnd(week: string): string {
+  const d = new Date(`${week}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 6);
+  return d.toISOString().slice(0, 10);
+}

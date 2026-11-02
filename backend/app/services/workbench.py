@@ -38,11 +38,13 @@ DEFAULT_PRIORITY_RANK = 99
 TODO_ORDER = {
     "overdue": 0,
     "blocked": 1,
-    "due_soon": 2,
-    "unassigned": 3,
-    "missing_allocation": 4,
-    "capacity": 5,
-    "review": 6,
+    "over_capacity": 2,
+    "due_soon": 3,
+    "unassigned": 4,
+    "missing_date": 5,
+    "missing_allocation": 6,
+    "capacity": 7,
+    "review": 8,
 }
 
 
@@ -68,6 +70,9 @@ def _is_terminal(state: str) -> bool:
 
 
 def _is_blocked(milestone: Milestone) -> bool:
+    # 已完成/已取消的节点不再算阻塞：历史遗留的 blocker_reason 不应继续占用待处理事项。
+    if _is_terminal(milestone.state):
+        return False
     return milestone.state in BLOCKING_STATES or bool((milestone.blocker_reason or "").strip())
 
 
@@ -118,7 +123,7 @@ def build_workbench(
         scoped.append(project)
     scoped_ids = {p.id for p in scoped}
 
-    # --- 人员范围：范围内项目的负责人/执行人 + 本周有占用的人 -----------
+    # --- 人员范围：范围内项目的负责人/执行人 + 节点执行人 + 本周有占用的人 ---
     people_rows = list(
         db.execute(
             select(Person).where(Person.archived.is_(False)).order_by(Person.id)
@@ -130,7 +135,12 @@ def build_workbench(
         if any(
             a.person_id == person.id and a.project_id in scoped_ids for a in assignments
         )
-        or any(al.person_id == person.id for al in allocations)
+        or any(
+            m.assignee_id == person.id and m.project_id in scoped_ids for m in milestones
+        )
+        or any(
+            al.person_id == person.id and al.project_id in scoped_ids for al in allocations
+        )
     ]
 
     milestones_by_project: dict[int, list[Milestone]] = {}
@@ -146,8 +156,8 @@ def build_workbench(
     # --- 项目维度：逾期 / 临近交付 / 阻塞 / 待分派 -----------------------
     project_rows: dict[int, WorkbenchProject] = {}
     for project in scoped:
-        if project.state == "done":
-            continue
+        # 已结项项目不进入交付一览，但其结项前遗留的逾期/阻塞仍要出现在待处理事项。
+        is_done = project.state == "done"
         ms_items: list[WorkbenchMilestone] = []
         overdue_count = blocked_count = due_soon_count = 0
         for milestone in milestones_by_project.get(project.id, []):
@@ -187,7 +197,7 @@ def build_workbench(
                         detail=f"节点「{milestone.name}」已于 {commit.isoformat()} 到期，尚未完成",
                     )
                 )
-            if due_this_week:
+            if due_this_week and not is_done:
                 due_soon_count += 1
                 todos.append(
                     WorkbenchTodoItem(
@@ -221,7 +231,7 @@ def build_workbench(
                         detail=f"节点「{milestone.name}」处于{ milestone.state }",
                     )
                 )
-            if milestone.assignee_id is None and not terminal:
+            if milestone.assignee_id is None and not terminal and not is_done:
                 todos.append(
                     WorkbenchTodoItem(
                         kind="unassigned",
@@ -235,6 +245,24 @@ def build_workbench(
                         detail=f"节点「{milestone.name}」尚未指定执行人",
                     )
                 )
+            if commit is None and not terminal and not is_done:
+                todos.append(
+                    WorkbenchTodoItem(
+                        kind="missing_date",
+                        project_id=project.id,
+                        project_name=project.name,
+                        project_state=project.state,
+                        milestone_id=milestone.id,
+                        milestone_name=milestone.name,
+                        person_id=milestone.assignee_id,
+                        person_name=person_names.get(milestone.assignee_id),
+                        week_label=label,
+                        detail=f"节点「{milestone.name}」尚未填写承诺日期",
+                    )
+                )
+
+        if is_done:
+            continue
 
         allocation_days = _round(
             sum(al.days for al in allocations if al.project_id == project.id)
@@ -294,6 +322,16 @@ def build_workbench(
                 conflicts=list(conflicts.values()),
             )
         )
+        if card.over_days is not None:
+            todos.append(
+                WorkbenchTodoItem(
+                    kind="over_capacity",
+                    person_id=person.id,
+                    person_name=person.name,
+                    week_label=label,
+                    detail=f"{person.name} 本周投入超出容量 {card.over_days} 人天",
+                )
+            )
         if card.capacity is None:
             todos.append(
                 WorkbenchTodoItem(

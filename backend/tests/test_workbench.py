@@ -312,3 +312,107 @@ def test_person_card_matches_person_page(client):
     assert card["total_days"] == page["total_days"]
     assert card["allocations"][0]["id"] == alloc["id"]
     assert card["allocations"][0]["id"] == page["allocations"][0]["id"]
+
+
+# ---------------------------------------------------------------- 评审修复
+# 整分支评审的 Important / 重级 Minor：以下 6 条为回归用例。
+
+
+def test_milestone_assignee_in_scope_is_listed_and_pending(client):
+    """节点执行人即使没有职责记录，也要在工作台出现并看到待补数据。"""
+    p = person(client, "傅相杰", capacity=None)
+    pr = project(client, "贵州V1.5")
+    ms = milestone(
+        client,
+        pr["id"],
+        "节点执行",
+        commit_date="2026-11-05",
+        state="进行中",
+        assignee_id=p["id"],
+    )
+    data = board(client, week=WEEK)
+    assert [c["person_id"] for c in data["people"]] == [p["id"]]
+    assert "capacity" in kinds(data)
+    assert any(
+        t["kind"] == "missing_allocation" and t["milestone_id"] == ms["id"]
+        for t in data["todos"]
+    )
+
+
+def test_filter_excludes_person_without_relation_to_scope(client):
+    """按项目过滤时，与该项目无关的人不进入人员区。"""
+    a = project(client, "贵州V1.5")
+    b = project(client, "卡鉴")
+    inside = person(client, "赵辉辉")
+    outside = person(client, "傅相杰")
+    assign(client, inside["id"], a["id"])
+    assign(client, outside["id"], b["id"])
+    allocate(client, inside["id"], a["id"], 1)
+    allocate(client, outside["id"], b["id"], 1)
+    data = board(client, week=WEEK, project_id=a["id"])
+    assert [c["person_id"] for c in data["people"]] == [inside["id"]]
+
+
+def test_over_capacity_is_pending(client):
+    """已填投入超出容量必须进入待处理事项。"""
+    p = person(client, "傅相杰", capacity=2.0)
+    pr = project(client, "贵州V1.5")
+    assign(client, p["id"], pr["id"])
+    allocate(client, p["id"], pr["id"], 3)
+    data = board(client, week=WEEK)
+    assert "over_capacity" in kinds(data)
+    over = [t for t in data["todos"] if t["kind"] == "over_capacity"]
+    assert over[0]["person_id"] == p["id"]
+    assert over[0]["week_label"] == "2026-11-02 ~ 2026-11-08"
+
+
+def test_missing_commit_date_is_pending(client):
+    """未填承诺日期的未完成节点属于待补数据。"""
+    p = person(client, "傅相杰")
+    pr = project(client, "贵州V1.5")
+    assign(client, p["id"], pr["id"])
+    ms = milestone(
+        client, pr["id"], "缺承诺日期", state="未开始", assignee_id=p["id"]
+    )
+    data = board(client, week=WEEK)
+    assert any(
+        t["kind"] == "missing_date" and t["milestone_id"] == ms["id"]
+        for t in data["todos"]
+    )
+
+
+def test_done_project_overdue_still_visible(client):
+    """已完成项目不进入项目一览，但其未完成节点的逾期仍然可见。"""
+    p = person(client, "傅相杰")
+    pr = project(client, "已结项", state="done")
+    assign(client, p["id"], pr["id"])
+    ms = milestone(
+        client, pr["id"], "结项前逾期", commit_date="2026-10-20", state="进行中"
+    )
+    allocate(client, p["id"], pr["id"], 1)
+    data = board(client, week=WEEK)
+    assert [row["id"] for row in data["projects"]] == []
+    assert any(
+        t["kind"] == "overdue" and t["milestone_id"] == ms["id"] for t in data["todos"]
+    )
+
+
+def test_terminal_milestone_with_legacy_blocker_not_blocked(client):
+    """已完成节点即使残留旧的阻塞说明，也不再算阻塞待处理。"""
+    p = person(client, "傅相杰")
+    pr = project(client, "贵州V1.5")
+    assign(client, p["id"], pr["id"])
+    ms = milestone(
+        client,
+        pr["id"],
+        "已完成节点",
+        commit_date="2026-10-20",
+        state="已完成",
+        assignee_id=p["id"],
+    )
+    r = client.patch(
+        f"/api/milestones/{ms['id']}", json={"blocker_reason": "历史遗留说明"}
+    )
+    assert r.status_code == 200, r.text
+    data = board(client, week=WEEK)
+    assert "blocked" not in kinds(data)

@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { EmptyState, ErrorBanner, Field, Loading, errorMessage } from "../components/common";
 import WeekPanel from "../components/WeekPanel";
-import { currentWeek, shiftWeek } from "../week";
+import { currentWeek, shiftWeek, weekEnd } from "../week";
 import { useWeekParam } from "../useWeekParam";
 import type { Assignment, Person, Project } from "../types";
 
@@ -270,7 +270,7 @@ export default function PersonPage() {
                 下一周
               </button>
               <span className="muted">
-                周区间 {week} ~ {shiftWeek(week, 6)}
+                周区间 {week} ~ {weekEnd(week)}
               </span>
             </div>
             <WeekPanel personId={selected.id} week={week} />

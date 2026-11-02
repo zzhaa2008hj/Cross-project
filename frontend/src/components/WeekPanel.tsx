@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { EmptyState, ErrorBanner, Field, Loading, errorMessage } from "./common";
 import type { Allocation, Milestone, PersonWeek, Project } from "../types";
@@ -40,16 +40,22 @@ export default function WeekPanel({ personId, week, focusProjectId, personName }
   const [days, setDays] = useState<string>("");
   const [editDays, setEditDays] = useState<Record<number, string>>({});
   const [capacityInput, setCapacityInput] = useState<string>("");
+  // 请求序号：只有最后一次请求的结果才允许渲染，避免旧响应覆盖新周的数据。
+  const requestSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++requestSeq.current;
     setError(null);
     try {
-      setView(await api.getPersonWeek(personId, week));
+      const next = await api.getPersonWeek(personId, week);
+      if (seq !== requestSeq.current) return; // 过期响应，丢弃
+      setView(next);
     } catch (e) {
+      if (seq !== requestSeq.current) return; // 过期响应，丢弃
       setError(errorMessage(e));
       setView(null);
     } finally {
-      setLoading(false);
+      if (seq === requestSeq.current) setLoading(false);
     }
   }, [personId, week]);
 

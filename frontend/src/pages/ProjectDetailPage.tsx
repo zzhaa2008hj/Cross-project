@@ -12,7 +12,7 @@ import MilestoneForm, {
 import RescheduleDialog from "../components/RescheduleDialog";
 import WeekPanel from "../components/WeekPanel";
 import { EmptyState, ErrorBanner, Field, Loading } from "../components/common";
-import { currentWeek, shiftWeek } from "../week";
+import { currentWeek, shiftWeek, weekEnd } from "../week";
 import { useWeekParam } from "../useWeekParam";
 import {
   PROJECT_STATE_LABEL,
@@ -425,7 +425,7 @@ export default function ProjectDetailPage() {
             下一周
           </button>
           <span className="muted">
-            周区间 {week} ~ {shiftWeek(week, 6)}
+            周区间 {week} ~ {weekEnd(week)}
           </span>
         </div>
         <p className="muted">

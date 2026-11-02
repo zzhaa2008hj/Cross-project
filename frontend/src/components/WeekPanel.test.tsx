@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WeekPanel from "./WeekPanel";
 
@@ -103,6 +103,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/** 可手动兑现的 Promise，用于模拟乱序返回的请求。 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 describe("人员周视图", () => {
   it("加载完成后显示容量、占用合计与状态文字", async () => {
     setup();
@@ -187,5 +196,25 @@ describe("人员周视图", () => {
     await waitFor(() => expect(screen.getByText("标记本周投入已核对")).toBeTruthy());
     fireEvent.click(screen.getByText("标记本周投入已核对"));
     await waitFor(() => expect(setWeekReview).toHaveBeenCalledWith(7, WEEK, true));
+  });
+
+  it("切换周后丢弃过期响应，只渲染最后一次结果", async () => {
+    const first = deferred<ReturnType<typeof weekView>>();
+    const second = deferred<ReturnType<typeof weekView>>();
+    getPersonWeek.mockImplementationOnce(() => first.promise);
+    getPersonWeek.mockImplementationOnce(() => second.promise);
+    const { rerender } = render(<WeekPanel personId={7} week={WEEK} />);
+    await waitFor(() => expect(getPersonWeek).toHaveBeenCalledTimes(1));
+    rerender(<WeekPanel personId={7} week="2026-11-09" />);
+    await waitFor(() => expect(getPersonWeek).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      second.resolve(weekView({ week: "2026-11-09", status_text: "新一周状态" }));
+    });
+    expect(screen.getByText("新一周状态")).toBeTruthy();
+    await act(async () => {
+      first.resolve(weekView({ status_text: "旧一周状态" }));
+    });
+    expect(screen.queryByText("旧一周状态")).toBeNull();
+    expect(screen.getByText("新一周状态")).toBeTruthy();
   });
 });
