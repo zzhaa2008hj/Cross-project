@@ -1,0 +1,16 @@
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# 后端
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 数据（SQLite 只存放在项目登记的 Git 外目录，此处兜底）
+*.db
+*.db-wal
+*.db-shm
+data/
