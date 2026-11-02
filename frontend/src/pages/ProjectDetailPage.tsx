@@ -256,7 +256,7 @@ export default function ProjectDetailPage() {
               }}
             />
           </Field>
-          <Field label="当前重点节点" hint="手动指定，E1 不自动推导">
+          <Field label="当前重点节点" hint="手动指定，不自动推导">
             <select
               value={project.current_focus_milestone_id ?? ""}
               onChange={(e) =>

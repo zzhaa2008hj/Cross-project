@@ -1,4 +1,4 @@
-"""E1 应用入口。"""
+"""应用入口。"""
 from __future__ import annotations
 
 import os
@@ -10,8 +10,8 @@ from .api import router
 from .db import init_db
 
 app = FastAPI(
-    title="跨项目管理软件 E1",
-    description="项目/节点、依赖改期预览、只读源导入报告（E1 范围）",
+    title="跨项目管理软件 E2",
+    description="项目/节点、依赖改期预览、只读源导入报告、人员周容量与跨项目分配",
     version="0.1.0",
 )
 

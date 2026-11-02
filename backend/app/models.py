@@ -1,7 +1,7 @@
-"""E1 数据模型。
+"""数据模型。
 
-边界说明：E1 不含 Allocation（周投入）表——分派节点执行人只写 assignee_id，
-不产生任何占用记录；周容量与 0.5 人天分配属于 E2。
+边界说明：占用只来自 Allocation（周投入）表；分派节点执行人只写 assignee_id，
+项目职责（Assignment）也不产生占用记录。E2 起启用周容量与 0.5 人天分配。
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class Person(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True)
     roles: Mapped[str] = mapped_column(String(255), default="")
     skills: Mapped[str] = mapped_column(String(255), default="")
-    # E1 只做"最小 Person 选择/未分派"，容量字段留空代表未知，E2 才启用
+    # 默认周容量：留空代表未知（与 0 严格区分）；E2 起可被指定周覆盖
     weekly_capacity: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
     archived: Mapped[bool] = mapped_column(Boolean, default=False)

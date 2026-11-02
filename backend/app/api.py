@@ -1,4 +1,4 @@
-"""HTTP 接口层（E1）。"""
+"""HTTP 接口层。"""
 from __future__ import annotations
 
 from datetime import date, datetime

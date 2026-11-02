@@ -1,7 +1,7 @@
 """运行期配置：数据目录、vault 只读来源路径、导入对账预期。
 
 数据目录在本项目登记的 Git 外存储，容器内通过 CP_DATA_DIR 注入。
-vault 只读挂载路径由 CP_VAULT_DIR 注入，正式写回不在 E1 范围内。
+vault 只读挂载路径由 CP_VAULT_DIR 注入，正式写回不在当前版本范围内。
 """
 from __future__ import annotations
 
