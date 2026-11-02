@@ -56,6 +56,11 @@ def db_path() -> Path:
     return data_dir() / "sqlite" / "crossproject.db"
 
 
+def exports_dir() -> Path:
+    """导出预览目录：优先 ``CP_EXPORT_DIR``，否则落在数据目录下的 ``exports/``。"""
+    return Path(os.environ.get("CP_EXPORT_DIR", str(data_dir() / "exports")))
+
+
 def vault_dir() -> Path:
     return Path(os.environ.get("CP_VAULT_DIR", str(_DEFAULT_VAULT_DIR)))
 
