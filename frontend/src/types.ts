@@ -196,6 +196,85 @@ export interface ImportReport {
   created_at: string;
 }
 
+// E3：工作台汇总。只读，与人员页共用同一份 Allocation ID。
+export interface WorkbenchTodoItem {
+  kind: string;
+  project_id: number | null;
+  project_name: string | null;
+  project_state: string | null;
+  milestone_id: number | null;
+  milestone_name: string | null;
+  person_id: number | null;
+  person_name: string | null;
+  due_date: string | null;
+  week_label: string;
+  detail: string;
+}
+
+export interface WorkbenchMilestone {
+  id: number;
+  name: string;
+  state: string;
+  commit_date: string | null;
+  start_date: string | null;
+  assignee_id: number | null;
+  assignee_name: string | null;
+  overdue: boolean;
+  due_this_week: boolean;
+  blocked: boolean;
+}
+
+export interface WorkbenchProject {
+  id: number;
+  name: string;
+  state: ProjectState;
+  on_hold: boolean;
+  priority: string;
+  priority_rank: number;
+  current_focus_milestone_id: number | null;
+  current_focus_name: string | null;
+  allocation_days: number;
+  overdue_count: number;
+  blocked_count: number;
+  due_soon_count: number;
+  milestones: WorkbenchMilestone[];
+}
+
+export interface WorkbenchConflict {
+  project_id: number;
+  project_name: string | null;
+  project_state: string | null;
+  days: number;
+  allocations: Allocation[];
+}
+
+export interface WorkbenchPerson {
+  person_id: number;
+  name: string;
+  capacity: number | null;
+  capacity_source: "default" | "override";
+  total_days: number;
+  over_days: number | null;
+  remaining_days: number | null;
+  reviewed: boolean;
+  status_text: string;
+  assignments: Assignment[];
+  allocations: Allocation[];
+  unallocated_milestones: MilestoneBrief[];
+  conflicts: WorkbenchConflict[];
+}
+
+export interface Workbench {
+  week: string;
+  week_end: string;
+  today: string;
+  projects: WorkbenchProject[];
+  maintenance_projects: WorkbenchProject[];
+  people: WorkbenchPerson[];
+  todos: WorkbenchTodoItem[];
+  has_pending: boolean;
+}
+
 export interface Meta {
   project_states: ProjectState[];
   milestone_states: string[];

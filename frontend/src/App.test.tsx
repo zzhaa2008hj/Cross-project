@@ -26,6 +26,16 @@ vi.mock("./api", () => ({
     setWeekCapacity: vi.fn(),
     clearWeekCapacity: vi.fn(),
     setWeekReview: vi.fn(),
+    getWorkbench: vi.fn().mockResolvedValue({
+      week: "2026-11-02",
+      week_end: "2026-11-08",
+      today: "2026-11-02",
+      projects: [],
+      maintenance_projects: [],
+      people: [],
+      todos: [],
+      has_pending: false,
+    }),
   },
   ApiError: class extends Error {},
 }));
@@ -45,6 +55,17 @@ describe("导航与路由", () => {
     );
     const link = screen.getByRole("link", { name: "人员" });
     expect(link.getAttribute("href")).toBe("/persons");
+  });
+
+  it("导航提供工作台入口", () => {
+    listPersons.mockResolvedValue([]);
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <App />
+      </MemoryRouter>,
+    );
+    const link = screen.getByRole("link", { name: "工作台" });
+    expect(link.getAttribute("href")).toBe("/workbench");
   });
 
   it("/persons 路由渲染人员页", async () => {
