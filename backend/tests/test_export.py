@@ -157,3 +157,22 @@ def test_diff_exports_ignores_unchanged_tables(tmp_path):
     diff = diff_exports(before, after)
     assert diff["tables"]["milestones"]["changed"] == 0
     assert diff["tables"]["milestones"]["added"] == 0
+
+
+def test_build_export_carries_foreign_key_metadata(tmp_path):
+    db = tmp_path / "fk.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE persons (id INTEGER PRIMARY KEY, name TEXT)")
+    conn.execute(
+        "CREATE TABLE week_capacities (id INTEGER PRIMARY KEY,"
+        " person_id INTEGER REFERENCES persons(id), week TEXT, days REAL)"
+    )
+    conn.commit()
+    conn.close()
+
+    export = build_export(db)
+
+    fks = export["foreign_keys"]["week_capacities"]
+    assert len(fks) == 1
+    assert fks[0]["referred_table"] == "persons"
+    assert fks[0]["columns"] == ["person_id"]

@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .snapshot import read_tables, table_columns
+from .snapshot import foreign_keys, read_tables, table_columns
 
 __all__ = [
     "build_export",
@@ -49,6 +49,7 @@ def build_export(db_path: Path) -> dict:
     """
     tables = read_tables(Path(db_path))
     columns = table_columns(Path(db_path))
+    fks = foreign_keys(Path(db_path))
     counts = {name: len(rows) for name, rows in tables.items()}
     return {
         "schema_version": SCHEMA_VERSION,
@@ -56,6 +57,7 @@ def build_export(db_path: Path) -> dict:
         "snapshot_id": _snapshot_id(tables),
         "counts": counts,
         "columns": columns,
+        "foreign_keys": fks,
         "tables": tables,
     }
 

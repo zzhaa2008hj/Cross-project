@@ -99,3 +99,35 @@ def snapshot_db(db_path: Path, dest: Path) -> Path:
     finally:
         source.close()
     return dest
+
+
+def foreign_keys(db_path: Path) -> dict[str, list[dict]]:
+    """返回 表名 → 外键列表（引用表、引用列、本表列）。
+
+    恢复时据此决定建表顺序与外键约束，保证重建出来的库仍然自洽。
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        result: dict[str, list[dict]] = {}
+        for table in list_tables(conn):
+            rows = conn.execute(
+                f"PRAGMA foreign_key_list({_quote(table)})"
+            ).fetchall()
+            grouped: dict[int, dict] = {}
+            for row in rows:
+                fk_id, _seq, ref_table, from_col, to_col = row[0], row[1], row[2], row[3], row[4]
+                entry = grouped.setdefault(
+                    fk_id,
+                    {
+                        "referred_table": ref_table,
+                        "referred_columns": [],
+                        "columns": [],
+                    },
+                )
+                entry["referred_columns"].append(to_col)
+                entry["columns"].append(from_col)
+            if grouped:
+                result[table] = [grouped[key] for key in sorted(grouped)]
+        return result
+    finally:
+        conn.close()
