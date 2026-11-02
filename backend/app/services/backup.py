@@ -15,7 +15,7 @@ from ..config import data_dir
 from .export import build_export, render_markdown, render_obsidian_summary
 from .snapshot import snapshot_db
 
-__all__ = ["backup_root", "run_backup", "safe_join", "default_stamp"]
+__all__ = ["backup_root", "run_backup", "safe_join", "default_stamp", "next_free_stamp"]
 
 DB_NAME = "crossproject.db"
 JSON_NAME = "export.json"
@@ -33,6 +33,25 @@ def backup_root() -> Path:
 
 def default_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def next_free_stamp(root: Path, base: str | None = None) -> str:
+    """返回一个备份根目录下尚未被占用的版本号。
+
+    版本号默认精确到秒，同一秒内重复触发会撞名。给 API 用的是这个函数：
+    撞名时追加 ``-2``、``-3`` 序号，保证手动触发不会因同秒重复而直接失败；
+    显式指定版本号的 CLI 仍然拒绝覆盖既有备份。
+    """
+    root = Path(root)
+    base_stamp = base or default_stamp()
+    candidate = base_stamp
+    index = 1
+    while safe_join(root, candidate).exists():
+        index += 1
+        if index > 50:
+            raise FileExistsError(f"备份版本号过多，已放弃：{base_stamp}")
+        candidate = f"{base_stamp}-{index}"
+    return candidate
 
 
 def safe_join(base: Path, *parts: str) -> Path:

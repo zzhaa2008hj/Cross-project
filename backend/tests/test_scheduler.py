@@ -62,6 +62,22 @@ def test_run_scheduled_backup_publishes_backup(tmp_path, monkeypatch):
     assert (backups / summary["stamp"] / "export.json").exists()
 
 
+def test_run_scheduled_backup_reuses_free_stamp_when_version_taken(tmp_path, monkeypatch):
+    """版本号已被占用时，调度应顺延序号而不是整次备份失败。"""
+    data_dir = _make_data_dir(tmp_path)
+    monkeypatch.setenv("CP_DATA_DIR", str(data_dir))
+    backups = tmp_path / "backups"
+    monkeypatch.setenv("CP_BACKUP_DIR", str(backups))
+    monkeypatch.setattr("app.services.scheduler.default_stamp", lambda: "20261102T000000Z")
+
+    first = run_scheduled_backup()
+    second = run_scheduled_backup()
+
+    assert first is not None and second is not None
+    assert first["stamp"] != second["stamp"]
+    assert (backups / second["stamp"] / "export.json").exists()
+
+
 def test_run_scheduled_backup_swallows_failure(tmp_path, monkeypatch):
     """备份失败只记录日志，不应把服务带崩。"""
     data_dir = _make_data_dir(tmp_path)

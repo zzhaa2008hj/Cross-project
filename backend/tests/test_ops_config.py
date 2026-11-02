@@ -62,6 +62,20 @@ def test_dockerfile_sets_backup_dir_and_healthcheck():
     assert "HEALTHCHECK" in text
 
 
+def test_nginx_proxies_to_unique_backend_alias():
+    """共享网络上 'backend' 别名被多个容器占用，反代必须用唯一别名。"""
+    text = (ROOT / "frontend" / "nginx.conf").read_text(encoding="utf-8")
+
+    assert "http://cp-develop-backend:8000" in text
+    assert "http://backend:8000" not in text
+
+
+def test_compose_declares_unique_backend_alias():
+    text = _compose_text()
+
+    assert "cp-develop-backend" in text
+
+
 def test_readme_documents_preview_backup_restore_and_limits():
     text = README.read_text(encoding="utf-8")
 

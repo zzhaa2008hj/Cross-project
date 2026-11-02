@@ -10,7 +10,7 @@ import os
 import threading
 
 from ..config import db_path
-from .backup import backup_root, run_backup
+from .backup import backup_root, default_stamp, next_free_stamp, run_backup
 
 __all__ = [
     "backup_enabled",
@@ -45,7 +45,8 @@ def backup_interval_seconds() -> int:
 def run_scheduled_backup() -> dict | None:
     """做一次备份；失败只记日志并返回 ``None``。"""
     try:
-        summary = run_backup(db_path(), backup_root())
+        root = backup_root()
+        summary = run_backup(db_path(), root, next_free_stamp(root, default_stamp()))
     except Exception as exc:  # noqa: BLE001  调度失败不能影响服务
         logger.warning("每日备份失败：%s", exc)
         return None

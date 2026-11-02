@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from .config import db_path, exports_dir
-from .services.backup import backup_root, run_backup
+from .services.backup import backup_root, default_stamp, next_free_stamp, run_backup
 from .services.export import (
     build_export,
     diff_exports,
@@ -180,5 +180,13 @@ def get_preview_obsidian(preview_id: str) -> PlainTextResponse:
 
 @router.post("/api/backup/run")
 def post_backup_run() -> dict:
-    """手动触发一次一致性备份，返回备份摘要。"""
-    return run_backup(db_path(), backup_root())
+    """手动触发一次一致性备份，返回备份摘要。
+
+    版本号精确到秒，同一秒内重复触发会自动顺延序号，避免直接失败。
+    """
+    root = backup_root()
+    try:
+        stamp = next_free_stamp(root, default_stamp())
+        return run_backup(db_path(), root, stamp)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

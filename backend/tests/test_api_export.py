@@ -105,3 +105,19 @@ def test_backup_run_endpoint_publishes_backup(client, export_env):
     assert len(published) == 1
     assert (published[0] / "export.json").exists()
     assert (published[0] / "crossproject.db").exists()
+
+
+def test_backup_run_endpoint_repeated_in_same_second_still_succeeds(client, export_env, monkeypatch):
+    """同一秒内重复触发备份：不应因版本号冲突直接失败。"""
+    monkeypatch.setattr("app.api_export.default_stamp", lambda: "20261102T000000Z")
+    client.post("/api/projects", json={"name": "甲项目"})
+
+    first = client.post("/api/backup/run")
+    second = client.post("/api/backup/run")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["stamp"] != second.json()["stamp"]
+    published = [p for p in (export_env / "backups").iterdir() if p.is_dir()]
+    assert len(published) == 2
+    assert all((p / "crossproject.db").exists() for p in published)
