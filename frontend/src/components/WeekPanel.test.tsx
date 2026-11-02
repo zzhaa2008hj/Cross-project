@@ -189,6 +189,55 @@ describe("人员周视图", () => {
     expect((screen.getByLabelText("新增分配人天") as HTMLInputElement).value).toBe("1.5");
   });
 
+  it("非法负数容量不提交，保留原容量与已填内容", async () => {
+    setup();
+    render(<WeekPanel personId={7} week={WEEK} />);
+    await waitFor(() => expect(screen.getByText("保存指定周容量")).toBeTruthy());
+    const input = screen.getByLabelText("指定周容量") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "-0.5" } });
+    fireEvent.click(screen.getByText("保存指定周容量"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("容量"));
+    expect(setWeekCapacity).not.toHaveBeenCalled();
+    expect(input.value).toBe("-0.5");
+    expect(screen.getByText(/容量 5 人天/)).toBeTruthy();
+  });
+
+  it("非法步长容量不提交，保留原容量与已填内容", async () => {
+    setup();
+    render(<WeekPanel personId={7} week={WEEK} />);
+    await waitFor(() => expect(screen.getByText("保存指定周容量")).toBeTruthy());
+    const input = screen.getByLabelText("指定周容量") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "1.2" } });
+    fireEvent.click(screen.getByText("保存指定周容量"));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("容量"));
+    expect(setWeekCapacity).not.toHaveBeenCalled();
+    expect(input.value).toBe("1.2");
+    expect(screen.getByText(/容量 5 人天/)).toBeTruthy();
+  });
+
+  it("合法 0 与 0.5 步长容量可以保存", async () => {
+    setup();
+    setWeekCapacity.mockResolvedValue({});
+    render(<WeekPanel personId={7} week={WEEK} />);
+    await waitFor(() => expect(screen.getByText("保存指定周容量")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("指定周容量"), { target: { value: "0" } });
+    fireEvent.click(screen.getByText("保存指定周容量"));
+    await waitFor(() => expect(setWeekCapacity).toHaveBeenCalledWith(7, WEEK, 0));
+
+    fireEvent.change(screen.getByLabelText("指定周容量"), { target: { value: "0.5" } });
+    fireEvent.click(screen.getByText("保存指定周容量"));
+    await waitFor(() => expect(setWeekCapacity).toHaveBeenCalledWith(7, WEEK, 0.5));
+  });
+
+  it("留空保存表示显式未知容量", async () => {
+    setup();
+    setWeekCapacity.mockResolvedValue({});
+    render(<WeekPanel personId={7} week={WEEK} />);
+    await waitFor(() => expect(screen.getByText("保存指定周容量")).toBeTruthy());
+    fireEvent.click(screen.getByText("保存指定周容量"));
+    await waitFor(() => expect(setWeekCapacity).toHaveBeenCalledWith(7, WEEK, null));
+  });
+
   it("点击核对按钮提交显式核对状态", async () => {
     setup();
     setWeekReview.mockResolvedValue({ reviewed: true });
