@@ -112,6 +112,17 @@ describe("工作台页", () => {
     expect(screen.queryByText("当前没有待处理事项")).toBeNull();
   });
 
+  it("范围内有项目但暂无人员时仍显示真实无待处理，不误判为过滤无匹配", async () => {
+    getWorkbench.mockResolvedValue(board({ projects: [project()] }));
+    renderPage();
+    await waitFor(() => expect(getWorkbench).toHaveBeenCalled());
+    // 项目在范围内，只是该范围内暂无待补数据与异常：这是真实正常态。
+    expect(await screen.findByText("当前没有待处理事项")).toBeTruthy();
+    expect(screen.queryByText("当前范围内没有项目与人员，暂无待处理事项")).toBeNull();
+    const projects = screen.getByRole("region", { name: "项目" });
+    expect(projects.textContent).toContain("贵州V1.5");
+  });
+
   it("容量未知等待补数据按待处理事项展示，不落入空态", async () => {
     getWorkbench.mockResolvedValue(
       board({
