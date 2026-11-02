@@ -1,6 +1,7 @@
 """E4 Task 4：离线恢复（校验、原子替换、回滚保留）与 CLI。"""
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -48,6 +49,27 @@ def _dump(path: Path) -> list[tuple]:
     rows = conn.execute("SELECT id,name,state FROM projects ORDER BY id").fetchall()
     conn.close()
     return rows
+
+
+def _read_main_file_only(path: Path) -> list[tuple]:
+    """只读 ``.db`` 主文件、不带上 ``-wal`` 附属，用来观测 checkpoint 状态。"""
+    tmp = path.parent / ".__main_only.db"
+    for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
+        if stale.exists():
+            stale.unlink()
+    shutil.copyfile(path, tmp)
+    try:
+        return _dump(tmp)
+    finally:
+        tmp.unlink()
+
+
+def _make_empty_db(path: Path) -> Path:
+    """用真实模型 schema 建一个不含任何数据行的库。"""
+    engine = create_engine(f"sqlite:///{path}")
+    Base.metadata.create_all(bind=engine)
+    engine.dispose()
+    return path
 
 
 def test_validate_sqlite_candidate_accepts_good_db(tmp_path):
@@ -235,7 +257,10 @@ def test_restore_holds_db_lock_throughout_replacement(tmp_path, monkeypatch):
 
     def probing_snapshot(source, dest):
         result = original(source, dest)
-        handle = open(restore_service.lock_path_for(Path(source)), "w")
+        # 恢复全程持有现库的库锁：持锁窗口内的两次快照（生成回滚副本、折发布快照）
+        # 都应看到现库的锁仍被占住。探针锚在现库上而不是 source 上——发布用的
+        # 快照源是候选库，它的锁本来就不属于这次恢复。
+        handle = open(restore_service.lock_path_for(live), "w")
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             observed["lock_available"] = True
@@ -253,22 +278,25 @@ def test_restore_holds_db_lock_throughout_replacement(tmp_path, monkeypatch):
     assert observed["lock_available"] is False
 
 
-def test_restore_json_rejects_export_without_any_rows(tmp_path):
-    """空导出（所有表都没有数据行）会清空现库，必须拒绝。"""
+def test_restore_json_accepts_complete_empty_export(tmp_path):
+    """本产品自己生成的完整空库导出是合法恢复源：合法空值，不是坏输入。
+
+    ``build_export`` 对完整空库能正常产出（各表 0 行），空库备份因此是合法恢复源；
+    拒绝它会让「全新库备份 → 恢复」这条正常路径走不通。
+    """
     live = _make_db(tmp_path / "live.db", name="现库")
-    from app.db import Base
-
-    payload = {
-        "schema_version": 1,
-        "tables": {table.name: [] for table in Base.metadata.sorted_tables},
-    }
+    export = build_export(_make_empty_db(tmp_path / "empty.db"))
     source = tmp_path / "export.json"
-    source.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    source.write_text(
+        json.dumps(export, ensure_ascii=False, default=str), encoding="utf-8"
+    )
 
-    with pytest.raises(ValueError):
-        restore_json(source, live, stamp="20261102T000000Z")
+    result = restore_json(source, live, stamp="20261102T000000Z")
 
-    assert _dump(live) == [(1, "现库", "active")]
+    assert _dump(live) == []
+    rollback = Path(result["rollback_path"])
+    assert rollback.exists()
+    assert _dump(rollback) == [(1, "现库", "active")]
 
 
 def test_restore_json_rejects_export_missing_model_tables(tmp_path):
@@ -296,3 +324,73 @@ def test_restore_sqlite_succeeds_when_live_db_is_corrupt(tmp_path):
     rollback = Path(result["rollback_path"])
     assert rollback.exists()
     assert rollback.read_bytes() == b"this is definitely not a sqlite database"
+
+
+def test_restore_sqlite_publishes_committed_wal_content(tmp_path):
+    """候选库已提交的数据只落在 -wal：校验读到新值，恢复结果也必须是新值。
+
+    旧实现只复制候选库主文件、随后删掉附属文件，已提交事务被静默丢弃：
+    校验通过且看到新值，恢复出来却是旧 checkpoint 值。
+    """
+    live = _make_db(tmp_path / "live.db", name="现库")
+    candidate = _make_db(tmp_path / "candidate.db", name="备份库")
+
+    keeper = sqlite3.connect(str(candidate))
+    keeper.execute("PRAGMA journal_mode=WAL")
+    keeper.execute("PRAGMA wal_autocheckpoint=0")
+    keeper.execute("BEGIN")
+    # 必须真正读一次，快照才占住；否则 keeper 不持锁，writer 关闭时被动
+    # checkpoint 会把 WAL 折回主文件，测不出「主文件旧 / -wal 新」这一形态。
+    keeper.execute("SELECT * FROM projects").fetchall()
+    try:
+        writer = sqlite3.connect(str(candidate))
+        writer.execute("UPDATE projects SET name=? WHERE id=1", ("备份库-新名",))
+        writer.commit()
+        writer.close()
+
+        # 主文件停在旧值，已提交的新值只存在于 -wal
+        assert _read_main_file_only(candidate) == [(1, "备份库", "active")]
+        assert _dump(candidate) == [(1, "备份库-新名", "active")]
+        assert validate_sqlite_candidate(candidate) == []
+
+        restore_sqlite(candidate, live, stamp="20261102T000000Z")
+
+        assert _dump(live) == [(1, "备份库-新名", "active")]
+    finally:
+        keeper.close()
+
+
+def test_restore_sqlite_repeats_same_stamp_keeps_earlier_rollback(tmp_path):
+    """同一 stamp 二次恢复不得覆盖第一次的回滚副本：原始恢复点必须保留。"""
+    live = _make_db(tmp_path / "live.db", name="现库")
+    candidate = _make_db(tmp_path / "candidate.db", name="备份库")
+
+    first = restore_sqlite(candidate, live, stamp="20261102T000000Z")
+    first_rollback = Path(first["rollback_path"])
+    assert _dump(first_rollback) == [(1, "现库", "active")]
+
+    second = restore_sqlite(candidate, live, stamp="20261102T000000Z")
+
+    assert _dump(first_rollback) == [(1, "现库", "active")]
+    assert Path(second["rollback_path"]) != first_rollback
+    assert _dump(Path(second["rollback_path"])) == [(1, "备份库", "active")]
+
+
+def test_restore_json_repeats_same_stamp_keeps_earlier_rollback(tmp_path):
+    """JSON 恢复路径同样不得用同一 stamp 覆盖上一份回滚副本。"""
+    live = _make_db(tmp_path / "live.db", name="现库")
+    export = build_export(live)
+    source = tmp_path / "export.json"
+    source.write_text(
+        json.dumps(export, ensure_ascii=False, default=str), encoding="utf-8"
+    )
+
+    first = restore_json(source, live, stamp="20261102T000000Z")
+    first_rollback = Path(first["rollback_path"])
+    assert _dump(first_rollback) == [(1, "现库", "active")]
+
+    second = restore_json(source, live, stamp="20261102T000000Z")
+
+    assert _dump(first_rollback) == [(1, "现库", "active")]
+    assert Path(second["rollback_path"]) != first_rollback
+    assert _dump(Path(second["rollback_path"])) == [(1, "现库", "active")]

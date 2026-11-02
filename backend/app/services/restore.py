@@ -184,6 +184,24 @@ def _rollback_path(db_path: Path, stamp: str) -> Path:
     return db_path.parent / f"{db_path.name}.rollback-{stamp}"
 
 
+def _allocate_rollback_path(db_path: Path, stamp: str) -> Path:
+    """分配回滚副本路径；同 stamp 已存在时追加序号，绝不覆盖已有回滚副本。
+
+    与备份版本号的惯例一致（见 ``backup.next_free_stamp``）：回滚副本就是恢复前的
+    原始恢复点，覆盖它等于丢掉上一次恢复的依据。CLI 的版本号精确到秒，同一秒内
+    重复恢复完全可能发生。
+    """
+    db_path = Path(db_path)
+    candidate = _rollback_path(db_path, stamp)
+    for index in range(2, 52):
+        if not candidate.exists():
+            return candidate
+        candidate = db_path.parent / f"{db_path.name}.rollback-{stamp}-{index}"
+    raise FileExistsError(
+        f"回滚副本序号已用尽，无法保留原始恢复点：{db_path.parent}"
+    )
+
+
 def _clear_sidecars(db_path: Path) -> None:
     """删掉旧库的 WAL 附属文件，避免替换后的库读到旧日志。"""
     for suffix in ("-wal", "-shm"):
@@ -193,21 +211,34 @@ def _clear_sidecars(db_path: Path) -> None:
 
 
 def _publish(new_db: Path, db_path: Path) -> None:
-    """把重建好的库原子替换到正式位置。"""
+    """把重建好的库原子替换到正式位置。
+
+    候选库可能带着自己的 ``-wal`` 附属：已提交但尚未 checkpoint 的数据就在里面，
+    直接复制主文件会把这些已提交事务静默丢掉（校验是只读打开、能看到 WAL 里的新值，
+    所以校验通过并不代表复制出来的主文件包含这些数据）。这里先用备份 API 折一份
+    自洽快照——它会把源库 WAL 中的已提交内容并入目标文件——再原子替换。
+    """
     db_path = Path(db_path)
+    new_db = Path(new_db)
     tmp = db_path.parent / f".{db_path.name}.restore-new"
-    shutil.copyfile(new_db, tmp)
+    for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
+        if stale.exists():
+            stale.unlink()
+
+    snapshot_db(new_db, tmp)
     _clear_sidecars(db_path)
     os.replace(tmp, db_path)
+    # 快照目标自身也可能落下附属文件（源库是 WAL 时），替换后要清掉。
+    _clear_sidecars(tmp)
 
 
 def _capture_rollback(db_path: Path, rollback: Path) -> bool:
-    """生成回滚副本；现库已损坏时保留原始字节，不阻断恢复。
+    """在**已分配好**的路径上生成回滚副本；现库已损坏时保留原始字节，不阻断恢复。
 
-    返回回滚副本是否是有效的 SQLite 快照。
+    返回回滚副本是否是有效的 SQLite 快照。调用方必须先用
+    ``_allocate_rollback_path`` 拿路径：这里不再删除既有文件，既有回滚副本是
+    上一次恢复的依据，不能被静默覆盖。
     """
-    if rollback.exists():
-        rollback.unlink()
     try:
         snapshot_db(db_path, rollback)
         return True
@@ -230,7 +261,7 @@ def restore_sqlite(candidate: Path, db_path: Path, stamp: str) -> dict:
         raise ValueError("候选库校验未通过：" + "；".join(problems))
 
     with restore_lock(db_path):
-        rollback = _rollback_path(db_path, stamp)
+        rollback = _allocate_rollback_path(db_path, stamp)
         rollback_valid = _capture_rollback(db_path, rollback)
         _publish(candidate, db_path)
     return {
@@ -261,7 +292,8 @@ def restore_json(source: Path, db_path: Path, stamp: str) -> dict:
 
     结构按当前模型定义生成（唯一约束、外键都在），数据来自导出文件。
     导出里出现但模型里没有的表会被跳过——记为已知限制。
-    导出必须包含当前模型的全部表、且至少有一行数据，否则拒绝恢复（避免清空现库）。
+    导出必须包含当前模型的全部表，否则拒绝恢复（避免用不完整的导出清空现库）。
+    完整但无数据行的导出是合法恢复源（``build_export`` 对全新空库可以正常产出）。
     """
     source = Path(source)
     db_path = Path(db_path)
@@ -282,8 +314,8 @@ def restore_json(source: Path, db_path: Path, stamp: str) -> dict:
         raise ValueError(
             "导出文件缺少必需的表：" + "、".join(missing_tables) + "，拒绝恢复（会清空现库）"
         )
-    if not any(exported.get(table.name) for table in tables):
-        raise ValueError("导出文件没有任何数据行，拒绝恢复（会清空现库）")
+    # 这里刻意不做"至少一行数据"的判断：完整空库是本产品自己能产出的合法状态
+    # （新建库备份后立刻恢复即此情形），行数不构成合法性判据。
 
     with restore_lock(db_path):
         tmp = db_path.parent / f".{db_path.name}.restore-json-{stamp}.tmp"
@@ -314,7 +346,7 @@ def restore_json(source: Path, db_path: Path, stamp: str) -> dict:
                     stale.unlink()
             raise ValueError("重建后的库校验未通过：" + "；".join(problems))
 
-        rollback = _rollback_path(db_path, stamp)
+        rollback = _allocate_rollback_path(db_path, stamp)
         rollback_valid = _capture_rollback(db_path, rollback)
 
         _publish(tmp, db_path)

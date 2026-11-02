@@ -31,7 +31,23 @@ docker-compose.yml  本机预览编排
 DATA_DIR=/home/hui/.local/share/paperclip-project-data/52a8eeac-d442-420e-af14-663ffd7af0ee
 mkdir -p "$DATA_DIR/sqlite" "$DATA_DIR/backups"
 
-# 构建并启动
+# 共享网络：compose 中声明为 external，只挂接不重建，因此必须先于 up 准备。
+# 幂等：已存在就直接复用（E1 已建并带标签）；只有缺失时才创建，并打上
+# project/issue/owner/lifecycle 标签。这里绝不删除或重建任何既有网络——正式 QA
+# 容器（pc-52a8eeac-hui206-qa-backend）也连在这个网络上，重建会把它断掉。
+NET=pc-52a8eeac-develop-net
+if docker network inspect "$NET" >/dev/null 2>&1; then
+  echo "网络已存在，直接复用：$NET"
+else
+  docker network create \
+    --label project=52a8eeac-d442-420e-af14-663ffd7af0ee \
+    --label issue=89f32463-500a-4445-a05a-b7d7d16194c8 \
+    --label owner=8769c0b0-acb4-4893-9294-01564a7aef05 \
+    --label lifecycle=preview \
+    "$NET"
+fi
+
+# 构建并启动（容器挂到上面的网络；nginx 通过专属别名 cp-develop-backend 反代）
 docker compose up -d --build
 
 # 健康检查与访问
@@ -189,6 +205,10 @@ python -m app.backup_cli restore --type sqlite \
 
 恢复流程固定为：**校验 → 生成回滚副本 → 原子替换**。校验不通过则不动原库。
 
+回滚副本按版本号命名；同一版本号已存在时自动追加 `-2`、`-3` 序号（最多 50 份，超出报 `FileExistsError`），绝不覆盖上一次的回滚副本——每一份都是「恢复到这一点」的依据，且不会被自动清理。
+
+发布前先用备份 API 把候选库折成一份自洽快照再原子替换，因此候选库 `-wal` 中已提交但尚未 checkpoint 的数据也会并入发布库。
+
 ### 环境变量（E4）
 
 | 变量 | 默认 | 说明 |
@@ -211,9 +231,9 @@ python -m app.backup_cli restore --type sqlite \
 - 每日备份调度在应用进程内运行；进程不运行时不会有备份，需要靠外部定时任务补位。
 - 备份保留策略未实现：历史备份目录不会自动清理，需人工清理。
 - 本机单用户场景，未做并发写入下的冲突消解（写库仍以单实例运行为前提）。
-- 离线恢复只复制候选 `.db` 主文件，未 checkpoint 的 WAL 内容不会带入；日常只读场景 WAL 为 0 字节，实际无影响，写入密集时段应先停止应用再恢复。
+- 离线恢复不直接复制候选 `.db` 主文件：发布前先用备份 API 折一份自洽快照（`sqlite3.Connection.backup()`），候选库 `-wal` 中已提交但尚未 checkpoint 的数据会一并并入发布库，事务边界完整，不会丢已提交数据。
 - 备份版本号精确到秒，同一秒内重复触发会自动追加 `-2`、`-3` 序号；并发触发时各自抢不同版本号，发布冲突会自动重试；显式指定版本号的 CLI 仍然拒绝覆盖既有备份。
-- 恢复校验要求候选 `.db` 含当前模型的**全部列**：早于当前版本的备份请走 JSON 恢复路径（按当前模型重建结构）。JSON 恢复还要求导出文件包含当前模型的全部表、且至少有一行数据，否则拒绝恢复（避免清空现库）。
+- 恢复校验要求候选 `.db` 含当前模型的**全部列**：早于当前版本的备份请走 JSON 恢复路径（按当前模型重建结构）。JSON 恢复还要求导出文件包含当前模型的**全部表**，缺表一律拒绝（避免用不完整的导出清空现库）；**完整但没有任何数据行的导出是合法恢复源**——全新库备份后立即恢复就是这种情形，行数不构成合法性判据。
 - 恢复过程独占库锁：应用仍在运行时恢复会被拒绝，替换期间应用也无法启动。
 - 现库本身已损坏时，回滚副本保存的是原始字节（不是有效 SQLite 快照），恢复仍会继续。
 - 预览环境与正式 QA 容器共用 `pc-52a8eeac-develop-net`，因此 nginx 反代使用专属别名 `cp-develop-backend`；改动 compose 网络时必须保留该别名，否则反代会随机打到其他容器上。该网络声明为 external，compose 只挂接、不重建。
