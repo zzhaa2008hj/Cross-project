@@ -127,6 +127,17 @@ export default function WorkbenchPage() {
     return `${data.week} ~ ${data.week_end}`;
   }, [data, week]);
 
+  /**
+   * 空范围（过滤无匹配）与范围内真实无待处理必须区分显示。
+   * 后端的 has_pending 只表示有没有待处理事项，范围为空时同样是 false，
+   * 因此这里按当前范围内的集合是否为空来区分两种空态。
+   */
+  const scopeEmpty = data
+    ? data.projects.length === 0 &&
+      data.maintenance_projects.length === 0 &&
+      data.people.length === 0
+    : false;
+
   return (
     <section className="page">
       <h1>工作台</h1>
@@ -193,7 +204,11 @@ export default function WorkbenchPage() {
             ))}
           </ul>
         ) : data ? (
-          <EmptyState text="当前没有待处理事项" />
+          scopeEmpty ? (
+            <EmptyState text="当前范围内没有项目与人员，暂无待处理事项" />
+          ) : (
+            <EmptyState text="当前没有待处理事项" />
+          )
         ) : null}
       </section>
 

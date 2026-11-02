@@ -97,11 +97,47 @@ function deferred<T>() {
 }
 
 describe("工作台页", () => {
-  it("既无异常又无待补数据时才显示没有待处理事项", async () => {
-    getWorkbench.mockResolvedValue(board());
+  it("范围内有项目与人员、且既无异常又无待补数据时才显示没有待处理事项", async () => {
+    getWorkbench.mockResolvedValue(board({ projects: [project()], people: [person()] }));
     renderPage();
     await waitFor(() => expect(getWorkbench).toHaveBeenCalled());
     expect(await screen.findByText("当前没有待处理事项")).toBeTruthy();
+  });
+
+  it("过滤无匹配、范围为空时显示范围空态，不冒充没有待处理事项", async () => {
+    getWorkbench.mockResolvedValue(board());
+    renderPage();
+    await waitFor(() => expect(getWorkbench).toHaveBeenCalled());
+    expect(await screen.findByText("当前范围内没有项目与人员，暂无待处理事项")).toBeTruthy();
+    expect(screen.queryByText("当前没有待处理事项")).toBeNull();
+  });
+
+  it("容量未知等待补数据按待处理事项展示，不落入空态", async () => {
+    getWorkbench.mockResolvedValue(
+      board({
+        has_pending: true,
+        todos: [
+          {
+            kind: "capacity",
+            project_id: null,
+            project_name: null,
+            project_state: null,
+            milestone_id: null,
+            milestone_name: null,
+            person_id: 7,
+            person_name: "傅相杰",
+            due_date: null,
+            week_label: "2026-11-02 ~ 2026-11-08",
+            detail: "傅相杰 本周容量未知，需确认后再排投入",
+          },
+        ],
+        people: [person({ capacity: null, capacity_source: "unknown", status_text: "容量未知" })],
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("容量待确认")).toBeTruthy();
+    expect(screen.queryByText("当前没有待处理事项")).toBeNull();
+    expect(screen.queryByText("当前范围内没有项目与人员，暂无待处理事项")).toBeNull();
   });
 
   it("有待处理事项时不显示空态文案，并标注临近交付的周区间", async () => {

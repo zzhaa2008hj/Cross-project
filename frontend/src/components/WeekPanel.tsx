@@ -20,6 +20,8 @@ interface WeekPanelProps {
   /** 项目页传入：只高亮该项目，不隐藏该人的其他项目冲突。 */
   focusProjectId?: number | null;
   personName?: string | null;
+  /** 分配写操作成功后通知宿主刷新自己的列表（项目页的项目分配列表）。 */
+  onAllocationChange?: () => void | Promise<void>;
 }
 
 /**
@@ -27,7 +29,13 @@ interface WeekPanelProps {
  * 人员页与项目页共用本组件与同一个后端汇总接口，因此同一份 Allocation
  * 在两页展示同一个稳定 ID，占用不会被重复计入。
  */
-export default function WeekPanel({ personId, week, focusProjectId, personName }: WeekPanelProps) {
+export default function WeekPanel({
+  personId,
+  week,
+  focusProjectId,
+  personName,
+  onAllocationChange,
+}: WeekPanelProps) {
   const [view, setView] = useState<PersonWeek | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +123,16 @@ export default function WeekPanel({ personId, week, focusProjectId, personName }
     }
   }
 
+  /**
+   * 分配写操作：成功后通知宿主刷新自己的列表。
+   * 人员卡只刷新自己的周视图，宿主的项目分配列表必须由宿主自己刷新。
+   */
+  async function runAllocation(action: () => Promise<unknown>): Promise<boolean> {
+    const ok = await run(action);
+    if (ok) await onAllocationChange?.();
+    return ok;
+  }
+
   async function submitAllocation() {
     const value = parseDays(days);
     if (value === null) {
@@ -125,7 +143,7 @@ export default function WeekPanel({ personId, week, focusProjectId, personName }
       setError("请选择项目");
       return;
     }
-    const ok = await run(() =>
+    const ok = await runAllocation(() =>
       api.createAllocation({
         person_id: personId,
         project_id: Number(projectId),
@@ -145,7 +163,7 @@ export default function WeekPanel({ personId, week, focusProjectId, personName }
       setError("人天必须是非负的 0.5 粒度数字");
       return;
     }
-    await run(() => api.updateAllocation(row.id, { days: value }));
+    await runAllocation(() => api.updateAllocation(row.id, { days: value }));
   }
 
   if (loading) return <Loading />;
@@ -250,7 +268,7 @@ export default function WeekPanel({ personId, week, focusProjectId, personName }
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => void run(() => api.deleteAllocation(row.id))}
+                onClick={() => void runAllocation(() => api.deleteAllocation(row.id))}
               >
                 {`删除分配#${row.id}`}
               </button>
