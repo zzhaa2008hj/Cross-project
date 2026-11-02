@@ -1,7 +1,7 @@
-"""E1 数据模型。
+"""数据模型。
 
-边界说明：E1 不含 Allocation（周投入）表——分派节点执行人只写 assignee_id，
-不产生任何占用记录；周容量与 0.5 人天分配属于 E2。
+边界说明：占用只来自 Allocation（周投入）表；分派节点执行人只写 assignee_id，
+项目职责（Assignment）也不产生占用记录。E2 起启用周容量与 0.5 人天分配。
 """
 from __future__ import annotations
 
@@ -33,7 +33,8 @@ class Person(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True)
     roles: Mapped[str] = mapped_column(String(255), default="")
-    # E1 只做"最小 Person 选择/未分派"，容量字段留空代表未知，E2 才启用
+    skills: Mapped[str] = mapped_column(String(255), default="")
+    # 默认周容量：留空代表未知（与 0 严格区分）；E2 起可被指定周覆盖
     weekly_capacity: Mapped[float | None] = mapped_column(Float, nullable=True)
     note: Mapped[str] = mapped_column(Text, default="")
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -158,6 +159,75 @@ class ImportRun(Base):
     report_markdown: Mapped[str] = mapped_column(Text, default="")
     applied: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Assignment(Base):
+    """项目职责：只记录"谁在项目里担什么角色"，不产生任何占用。"""
+
+    __tablename__ = "assignments"
+    __table_args__ = (UniqueConstraint("person_id", "project_id", "role"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("persons.id"), index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    role: Mapped[str] = mapped_column(String(64))
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class WeekCapacity(Base):
+    """指定周容量覆盖。days 为 NULL 表示"显式未知"，不回退默认容量。"""
+
+    __tablename__ = "week_capacities"
+    __table_args__ = (UniqueConstraint("person_id", "week"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("persons.id"), index=True)
+    week: Mapped[date] = mapped_column(Date, index=True)
+    days: Mapped[float | None] = mapped_column(Float, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class Allocation(Base):
+    """周投入分配：唯一占用来源。关联节点，或表示"整体项目管理"投入。"""
+
+    __tablename__ = "allocations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("persons.id"), index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    week: Mapped[date] = mapped_column(Date, index=True)
+    days: Mapped[float] = mapped_column(Float)
+    milestone_id: Mapped[int | None] = mapped_column(ForeignKey("milestones.id"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(32), default="milestone")
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class WeekReview(Base):
+    """本周投入是否已人工核对。分配一旦变动即失效。"""
+
+    __tablename__ = "week_reviews"
+    __table_args__ = (UniqueConstraint("person_id", "week"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("persons.id"), index=True)
+    week: Mapped[date] = mapped_column(Date, index=True)
+    reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
 
 
 class ReschedulePreview(Base):

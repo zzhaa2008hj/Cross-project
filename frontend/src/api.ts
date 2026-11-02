@@ -1,9 +1,12 @@
 import type {
+  Allocation,
+  Assignment,
   HistoryEntry,
   ImportReport,
   Meta,
   Milestone,
   Person,
+  PersonWeek,
   Project,
   ReschedulePreview,
 } from "./types";
@@ -81,6 +84,82 @@ export const api = {
   listPersons: () => request<Person[]>("/persons"),
   createPerson: (payload: Partial<Person>) =>
     request<Person>("/persons", { method: "POST", body: body(payload) }),
+  updatePerson: (id: number, payload: Partial<Person>) =>
+    request<Person>(`/persons/${id}`, { method: "PATCH", body: body(payload) }),
+  archivePerson: (id: number) =>
+    request<Person>(`/persons/${id}/archive`, { method: "POST" }),
+  restorePerson: (id: number) =>
+    request<Person>(`/persons/${id}/restore`, { method: "POST" }),
+
+  // E2：职责（不计占用）
+  listAssignments: (params: { person_id?: number; project_id?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.person_id !== undefined) q.set("person_id", String(params.person_id));
+    if (params.project_id !== undefined) q.set("project_id", String(params.project_id));
+    const qs = q.toString();
+    return request<Assignment[]>(`/assignments${qs ? `?${qs}` : ""}`);
+  },
+  createAssignment: (payload: {
+    person_id: number;
+    project_id: number;
+    role: string;
+    note?: string;
+  }) => request<Assignment>("/assignments", { method: "POST", body: body(payload) }),
+  updateAssignment: (id: number, payload: { role?: string; note?: string }) =>
+    request<Assignment>(`/assignments/${id}`, { method: "PATCH", body: body(payload) }),
+  deleteAssignment: (id: number) =>
+    request<{ deleted: boolean }>(`/assignments/${id}`, { method: "DELETE" }),
+
+  // E2：周投入分配（唯一占用来源）
+  listAllocations: (
+    params: { person_id?: number; project_id?: number; week?: string } = {},
+  ) => {
+    const q = new URLSearchParams();
+    if (params.person_id !== undefined) q.set("person_id", String(params.person_id));
+    if (params.project_id !== undefined) q.set("project_id", String(params.project_id));
+    if (params.week !== undefined) q.set("week", params.week);
+    const qs = q.toString();
+    return request<Allocation[]>(`/allocations${qs ? `?${qs}` : ""}`);
+  },
+  createAllocation: (payload: {
+    person_id: number;
+    project_id: number;
+    week: string;
+    days: number;
+    milestone_id?: number | null;
+    kind?: string;
+    note?: string;
+  }) => request<Allocation>("/allocations", { method: "POST", body: body(payload) }),
+  updateAllocation: (
+    id: number,
+    payload: {
+      person_id?: number;
+      project_id?: number;
+      week?: string;
+      days?: number;
+      milestone_id?: number | null;
+      kind?: string;
+      note?: string;
+    },
+  ) => request<Allocation>(`/allocations/${id}`, { method: "PATCH", body: body(payload) }),
+  deleteAllocation: (id: number) =>
+    request<{ deleted: boolean }>(`/allocations/${id}`, { method: "DELETE" }),
+
+  // E2：人员周视图、容量覆盖与显式核对
+  getPersonWeek: (personId: number, week: string) =>
+    request<PersonWeek>(`/persons/${personId}/weeks/${week}`),
+  setWeekCapacity: (personId: number, week: string, days: number | null) =>
+    request<PersonWeek>(`/persons/${personId}/weeks/${week}/capacity`, {
+      method: "PUT",
+      body: body({ days }),
+    }),
+  clearWeekCapacity: (personId: number, week: string) =>
+    request<PersonWeek>(`/persons/${personId}/weeks/${week}/capacity`, { method: "DELETE" }),
+  setWeekReview: (personId: number, week: string, reviewed: boolean) =>
+    request<PersonWeek>(`/persons/${personId}/weeks/${week}/review`, {
+      method: "PUT",
+      body: body({ reviewed }),
+    }),
 
   history: (params: { entity_type?: string; entity_id?: number } = {}) => {
     const q = new URLSearchParams();

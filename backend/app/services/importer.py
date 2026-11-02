@@ -276,7 +276,7 @@ def parse_milestone_table(text: str, rel: str) -> list[dict]:
                     "ref": source_ref,
                     "field": "本周投入",
                     "raw": row["本周投入"].strip(),
-                    "reason": "源为角色层百分比，E1 不折算到个人占用（E2 处理）",
+                    "reason": "源为角色层百分比，不折算到个人占用（周投入需显式填写）",
                 }
             )
 

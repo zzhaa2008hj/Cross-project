@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import type { FormEvent } from "react";
 import { api, ApiError } from "../api";
@@ -10,7 +10,9 @@ import MilestoneForm, {
   type MilestoneDraft,
 } from "../components/MilestoneForm";
 import RescheduleDialog from "../components/RescheduleDialog";
+import WeekPanel from "../components/WeekPanel";
 import { EmptyState, ErrorBanner, Field, Loading } from "../components/common";
+import { currentWeek } from "../week";
 import {
   PROJECT_STATE_LABEL,
   bufferWarnings,
@@ -18,7 +20,7 @@ import {
   formatDate,
   milestoneStateLabel,
 } from "../labels";
-import type { Milestone, Person, Project } from "../types";
+import type { Allocation, Assignment, Milestone, Person, Project } from "../types";
 
 export default function ProjectDetailPage() {
   const { projectId } = useParams();
@@ -38,6 +40,40 @@ export default function ProjectDetailPage() {
 
   const [personName, setPersonName] = useState("");
   const [personRoles, setPersonRoles] = useState("");
+
+  // E2：本项目的周投入分配与项目职责。分配是唯一占用来源，与人员页共用同一份数据。
+  const [allocations, setAllocations] = useState<Allocation[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const week = currentWeek();
+
+  const loadWeekly = useCallback(async () => {
+    try {
+      const [a, as] = await Promise.all([
+        api.listAllocations({ project_id: pid }),
+        api.listAssignments({ project_id: pid }),
+      ]);
+      setAllocations(a);
+      setAssignments(as);
+    } catch (e) {
+      // 周投入读取失败不阻断项目主体，错误单独提示。
+      setError(e instanceof ApiError ? e.detail : String(e));
+    }
+  }, [pid]);
+
+  useEffect(() => {
+    void loadWeekly();
+  }, [loadWeekly]);
+
+  /** 与本项目相关的人：项目内分配、项目职责、节点执行人。 */
+  const weekPersonIds = useMemo(() => {
+    const ids = new Set<number>();
+    allocations.forEach((a) => ids.add(a.person_id));
+    assignments.forEach((a) => ids.add(a.person_id));
+    project?.milestones?.forEach((m) => {
+      if (m.assignee_id) ids.add(m.assignee_id);
+    });
+    return Array.from(ids);
+  }, [allocations, assignments, project]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -220,7 +256,7 @@ export default function ProjectDetailPage() {
               }}
             />
           </Field>
-          <Field label="当前重点节点" hint="手动指定，E1 不自动推导">
+          <Field label="当前重点节点" hint="手动指定，不自动推导">
             <select
               value={project.current_focus_milestone_id ?? ""}
               onChange={(e) =>
@@ -376,8 +412,50 @@ export default function ProjectDetailPage() {
       )}
 
       <div className="card">
+        <h3>周投入分配</h3>
+        <p className="muted">
+          与人员页同一份 Allocation：同一分配 ID 只计一次占用，下方每个人的周视图会同时列出其
+          其他项目的冲突分配。
+        </p>
+        {allocations.length === 0 ? (
+          <EmptyState text="本项目还没有周投入分配" />
+        ) : (
+          <ul aria-label="项目分配列表" className="list">
+            {allocations.map((a) => (
+              <li key={a.id}>
+                <span>{a.person_name ?? `#${a.person_id}`}</span>
+                {" · "}
+                <span>{a.milestone_name ?? "整体项目管理"}</span>
+                {" · "}
+                <span>{a.days} 人天</span>
+                {" · "}
+                <span className="muted">周 {a.week}</span>
+                {" · "}
+                <span className="muted">{`分配#${a.id}`}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {weekPersonIds.map((id) => {
+        const p = persons.find((x) => x.id === id);
+        return (
+          <WeekPanel
+            key={id}
+            personId={id}
+            week={week}
+            focusProjectId={pid}
+            personName={p?.name ?? null}
+          />
+        );
+      })}
+
+      <div className="card">
         <h3>人员（最小选择）</h3>
-        <p className="muted">E1 只做执行人选择，不预建周投入/容量。</p>
+        <p className="muted">
+          人员资料、能力与周容量在人员页维护；这里只列执行人选择，不预建周投入。
+        </p>
         <ul className="list">
           {persons.map((p) => (
             <li key={p.id}>

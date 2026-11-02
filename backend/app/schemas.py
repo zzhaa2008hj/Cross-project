@@ -1,10 +1,43 @@
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .config import MILESTONE_STATES, PROJECT_STATES
+from .config import ASSIGNMENT_ROLES, MILESTONE_STATES, PROJECT_STATES
+
+# 人天：非负、有限、0.5 粒度；未知用 None，与 0 严格区分
+_DAY_STEP = 0.5
+_NON_FINITE_STRINGS = {"nan", "+nan", "-nan", "inf", "+inf", "-inf", "infinity", "+infinity"}
+
+
+def validate_days(value):
+    """把人天输入归一为合法浮点数；非法值抛 ValueError（接口返回 422）。"""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("人天必须是数字，不能是布尔值")
+    if isinstance(value, str) and value.strip().lower() in _NON_FINITE_STRINGS:
+        raise ValueError("人天必须是有限数字")
+    try:
+        days = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("人天必须是数字") from None
+    if not math.isfinite(days):
+        raise ValueError("人天必须是有限数字")
+    if days < 0:
+        raise ValueError("人天不能为负数")
+    if abs(days * 2 - round(days * 2)) > 1e-9:
+        raise ValueError("人天粒度为 0.5")
+    return days
+
+
+def validate_week(value: date) -> date:
+    """周键必须是周一（覆盖周一至周日）。"""
+    if value.weekday() != 0:
+        raise ValueError("周键必须是周一日期")
+    return value
 
 
 class ORMModel(BaseModel):
@@ -17,19 +50,41 @@ class ORMModel(BaseModel):
 class PersonCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     roles: str = ""
+    skills: str = ""
     note: str = ""
+    weekly_capacity: float | None = None
+
+    @field_validator("weekly_capacity", mode="before")
+    @classmethod
+    def _check_days(cls, v):
+        return validate_days(v)
 
 
 class PersonUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     roles: str | None = None
+    skills: str | None = None
     note: str | None = None
+    weekly_capacity: float | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v):
+        if v is None:
+            raise ValueError("人员姓名不能为空")
+        return v
+
+    @field_validator("weekly_capacity", mode="before")
+    @classmethod
+    def _check_days(cls, v):
+        return validate_days(v)
 
 
 class PersonOut(ORMModel):
     id: int
     name: str
     roles: str
+    skills: str
     weekly_capacity: float | None
     note: str
     archived: bool
@@ -269,3 +324,147 @@ class ImportReportOut(BaseModel):
 
 ProjectDetail.model_rebuild()
 MilestoneOut.model_rebuild()
+
+
+# ---------- E2：职责 / 容量 / 分配 / 核对 ----------
+
+
+class AssignmentCreate(BaseModel):
+    person_id: int
+    project_id: int
+    role: str
+    note: str = ""
+
+    @field_validator("role")
+    @classmethod
+    def _check_role(cls, v: str) -> str:
+        if v not in ASSIGNMENT_ROLES:
+            raise ValueError(f"职责必须是 {'/'.join(ASSIGNMENT_ROLES)} 之一")
+        return v
+
+
+class AssignmentUpdate(BaseModel):
+    role: str | None = None
+    note: str | None = None
+
+    @field_validator("role")
+    @classmethod
+    def _check_role(cls, v: str | None) -> str | None:
+        if v is not None and v not in ASSIGNMENT_ROLES:
+            raise ValueError(f"职责必须是 {'/'.join(ASSIGNMENT_ROLES)} 之一")
+        return v
+
+
+class AssignmentOut(ORMModel):
+    id: int
+    person_id: int
+    project_id: int
+    role: str
+    note: str
+    person_name: str | None = None
+    project_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AllocationCreate(BaseModel):
+    person_id: int
+    project_id: int
+    week: date
+    days: float
+    milestone_id: int | None = None
+    kind: str = ""
+    note: str = ""
+
+    @field_validator("days", mode="before")
+    @classmethod
+    def _check_days(cls, v):
+        return validate_days(v)
+
+    @field_validator("week")
+    @classmethod
+    def _check_week(cls, v: date) -> date:
+        return validate_week(v)
+
+    @field_validator("kind")
+    @classmethod
+    def _check_kind(cls, v: str) -> str:
+        if v and v not in ("milestone", "project_management"):
+            raise ValueError("分配类型必须是 milestone 或 project_management")
+        return v
+
+
+class AllocationUpdate(BaseModel):
+    person_id: int | None = None
+    project_id: int | None = None
+    week: date | None = None
+    days: float | None = None
+    milestone_id: int | None = None
+    kind: str | None = None
+    note: str | None = None
+
+    @field_validator("days", mode="before")
+    @classmethod
+    def _check_days(cls, v):
+        return validate_days(v)
+
+    @field_validator("week")
+    @classmethod
+    def _check_week(cls, v: date | None) -> date | None:
+        return validate_week(v) if v is not None else v
+
+    @field_validator("kind")
+    @classmethod
+    def _check_kind(cls, v: str | None) -> str | None:
+        if v and v not in ("milestone", "project_management"):
+            raise ValueError("分配类型必须是 milestone 或 project_management")
+        return v
+
+
+class AllocationOut(ORMModel):
+    id: int
+    person_id: int
+    project_id: int
+    week: date
+    week_end: date | None = None
+    days: float
+    milestone_id: int | None
+    kind: str
+    note: str
+    person_name: str | None = None
+    project_name: str | None = None
+    milestone_name: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class WeekCapacityUpdate(BaseModel):
+    days: float | None = None
+    note: str = ""
+
+    @field_validator("days", mode="before")
+    @classmethod
+    def _check_days(cls, v):
+        return validate_days(v)
+
+
+class WeekReviewUpdate(BaseModel):
+    reviewed: bool
+
+
+class PersonWeekOut(BaseModel):
+    """人员某一周的全量视图：占用、容量、核对状态一次给全，供人员页与项目页共用。"""
+
+    person_id: int
+    week: date
+    week_end: date
+    capacity: float | None
+    capacity_source: str  # default | override
+    total_days: float
+    over_days: float | None
+    remaining_days: float | None
+    reviewed: bool
+    allocations: list[AllocationOut] = []
+    assignments: list[AssignmentOut] = []
+    unallocated_milestones: list[MilestoneBrief] = []
+    status_text: str = ""

@@ -1,7 +1,7 @@
 """运行期配置：数据目录、vault 只读来源路径、导入对账预期。
 
 数据目录在本项目登记的 Git 外存储，容器内通过 CP_DATA_DIR 注入。
-vault 只读挂载路径由 CP_VAULT_DIR 注入，正式写回不在 E1 范围内。
+vault 只读挂载路径由 CP_VAULT_DIR 注入，正式写回不在当前版本范围内。
 """
 from __future__ import annotations
 
@@ -41,6 +41,11 @@ MILESTONE_STATES = (
     "已取消",
 )
 TERMINAL_MILESTONE_STATES = ("已完成", "已取消")
+
+# E2：项目职责（只记录角色，不产生占用）
+ASSIGNMENT_ROLES = ("项目负责人", "业务对接", "节点执行", "统筹管理")
+# E2：分配类型——关联节点，或整体项目管理投入
+ALLOCATION_KINDS = ("milestone", "project_management")
 
 
 def data_dir() -> Path:

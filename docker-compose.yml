@@ -6,7 +6,7 @@ services:
   backend:
     build:
       context: ./backend
-    image: pc-52a8eeac-backend:preview
+    image: pc-52a8eeac-backend:${PC_PREVIEW_TAG:-preview}
     container_name: pc-52a8eeac-develop-backend
     restart: unless-stopped
     environment:
@@ -27,14 +27,15 @@ services:
       - pc-52a8eeac-develop-net
     labels:
       project: "52a8eeac-d442-420e-af14-663ffd7af0ee"
-      issue: "fe76ba8b-5b73-4865-ba2b-97df79bd25b9"
+      issue: "${PC_PREVIEW_ISSUE:-135833e6-18e1-4ed0-9c64-abcd379c33a3}"
       owner: "8769c0b0-acb4-4893-9294-01564a7aef05"
       lifecycle: "preview"
+      version: "${PC_PREVIEW_TAG:-preview}"
 
   frontend:
     build:
       context: ./frontend
-    image: pc-52a8eeac-frontend:preview
+    image: pc-52a8eeac-frontend:${PC_PREVIEW_TAG:-preview}
     container_name: pc-52a8eeac-develop-frontend
     restart: unless-stopped
     depends_on:
@@ -46,15 +47,17 @@ services:
       - pc-52a8eeac-develop-net
     labels:
       project: "52a8eeac-d442-420e-af14-663ffd7af0ee"
-      issue: "fe76ba8b-5b73-4865-ba2b-97df79bd25b9"
+      issue: "${PC_PREVIEW_ISSUE:-135833e6-18e1-4ed0-9c64-abcd379c33a3}"
       owner: "8769c0b0-acb4-4893-9294-01564a7aef05"
       lifecycle: "preview"
+      version: "${PC_PREVIEW_TAG:-preview}"
 
 networks:
   pc-52a8eeac-develop-net:
     name: pc-52a8eeac-develop-net
     labels:
       project: "52a8eeac-d442-420e-af14-663ffd7af0ee"
-      issue: "fe76ba8b-5b73-4865-ba2b-97df79bd25b9"
+      issue: "${PC_PREVIEW_ISSUE:-135833e6-18e1-4ed0-9c64-abcd379c33a3}"
       owner: "8769c0b0-acb4-4893-9294-01564a7aef05"
       lifecycle: "preview"
+      version: "${PC_PREVIEW_TAG:-preview}"
