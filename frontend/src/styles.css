@@ -363,6 +363,91 @@ button.link,
   color: var(--danger);
 }
 
+/* 人员页月度人员表 */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.toolbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 工具行里的 Field 改成横排，否则复选框会独占一行 */
+.toolbar .field {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.toolbar .field input[type="checkbox"] {
+  width: auto;
+}
+
+.month-label {
+  min-width: 84px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.table-persons {
+  table-layout: fixed;
+}
+
+.table-persons .col-name {
+  width: 1.2fr;
+}
+
+.table-persons .col-num {
+  width: 0.8fr;
+}
+
+.table-persons .col-projects {
+  width: 2fr;
+}
+
+.table-persons .col-status {
+  width: 0.8fr;
+}
+
+.table-persons .col-actions {
+  width: 1fr;
+}
+
+.table-persons progress.cell-progress {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+}
+
+.cell-num {
+  text-align: right;
+}
+
+.cell-name {
+  font-weight: 600;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cell-over {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.cell-progress-over {
+  accent-color: var(--danger);
+}
+
 .cell-new {
   color: var(--ok);
 }
