@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,6 +37,10 @@ class Person(Base):
     skills: Mapped[str] = mapped_column(String(255), default="")
     # 默认周容量：留空代表未知（与 0 严格区分）；E2 起可被指定周覆盖
     weekly_capacity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 核定人天：每人每月的核定值，月度口径（默认 30，不留「未知」）
+    monthly_capacity: Mapped[float] = mapped_column(
+        Float, nullable=False, default=30.0, server_default=text("30")
+    )
     note: Mapped[str] = mapped_column(Text, default="")
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     source_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)

@@ -53,8 +53,9 @@ class PersonCreate(BaseModel):
     skills: str = ""
     note: str = ""
     weekly_capacity: float | None = None
+    monthly_capacity: float = 30.0
 
-    @field_validator("weekly_capacity", mode="before")
+    @field_validator("weekly_capacity", "monthly_capacity", mode="before")
     @classmethod
     def _check_days(cls, v):
         return validate_days(v)
@@ -66,6 +67,7 @@ class PersonUpdate(BaseModel):
     skills: str | None = None
     note: str | None = None
     weekly_capacity: float | None = None
+    monthly_capacity: float | None = None
 
     @field_validator("name")
     @classmethod
@@ -79,6 +81,13 @@ class PersonUpdate(BaseModel):
     def _check_days(cls, v):
         return validate_days(v)
 
+    @field_validator("monthly_capacity", mode="before")
+    @classmethod
+    def _check_monthly(cls, v):
+        if v is None:
+            raise ValueError("核定人天不能为空，请填数字（默认 30）")
+        return validate_days(v)
+
 
 class PersonOut(ORMModel):
     id: int
@@ -86,6 +95,7 @@ class PersonOut(ORMModel):
     roles: str
     skills: str
     weekly_capacity: float | None
+    monthly_capacity: float
     note: str
     archived: bool
     source_ref: str | None

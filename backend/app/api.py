@@ -119,6 +119,7 @@ def create_person(payload: PersonCreate, db: Session = Depends(get_db)):
         skills=payload.skills,
         note=payload.note,
         weekly_capacity=payload.weekly_capacity,
+        monthly_capacity=payload.monthly_capacity,
         edited_in_app=True,
     )
     db.add(person)
