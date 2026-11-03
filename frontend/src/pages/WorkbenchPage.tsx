@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { EmptyState, ErrorBanner, Field, Loading, errorMessage } from "../components/common";
 import { projectStateLabel } from "../labels";
+import { monthOfWeek } from "../month";
 import { currentWeek, shiftWeek, weekEnd } from "../week";
 import { useWeekParam } from "../useWeekParam";
 import type { Person, Project, Workbench, WorkbenchProject } from "../types";
@@ -254,7 +255,7 @@ export default function WorkbenchPage() {
               <header className="card-head">
                 <h3>{person.name}</h3>
                 <span className="muted">{person.status_text}</span>
-                <a className="link" href={`/persons?week=${week}&person=${person.person_id}`}>
+                <a className="link" href={`/persons?month=${monthOfWeek(week)}&person=${person.person_id}`}>
                   查看人员
                 </a>
               </header>

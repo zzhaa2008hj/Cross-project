@@ -12,6 +12,9 @@ const listMilestones = vi.fn();
 const listAssignments = vi.fn();
 const listAllocations = vi.fn();
 const getPersonWeek = vi.fn();
+const getPersonMonth = vi.fn();
+const listMonthlyRoster = vi.fn();
+const deleteAssignment = vi.fn();
 const getProject = vi.fn();
 const getWorkbench = vi.fn();
 
@@ -23,14 +26,17 @@ vi.mock("../api", () => ({
     listAssignments: (...args: unknown[]) => listAssignments(...args),
     listAllocations: (...args: unknown[]) => listAllocations(...args),
     getPersonWeek: (...args: unknown[]) => getPersonWeek(...args),
+    getPersonMonth: (...args: unknown[]) => getPersonMonth(...args),
     getProject: (...args: unknown[]) => getProject(...args),
     getWorkbench: (...args: unknown[]) => getWorkbench(...args),
+    listMonthlyRoster: (...args: unknown[]) => listMonthlyRoster(...args),
     createPerson: vi.fn(),
     updatePerson: vi.fn(),
     createAssignment: vi.fn(),
     createAllocation: vi.fn(),
     updateAllocation: vi.fn(),
     deleteAllocation: vi.fn(),
+    deleteAssignment: (...args: unknown[]) => deleteAssignment(...args),
     setWeekCapacity: vi.fn(),
     clearWeekCapacity: vi.fn(),
     setWeekReview: vi.fn(),
@@ -58,6 +64,18 @@ const project = {
   current_focus_milestone_id: null,
   milestones: [],
   assignments: [],
+};
+
+const roster = {
+  month: "2026-11",
+  people: [
+    { person_id: 7, name: "傅相杰", skills: "地质AI", roles: "项目负责人", note: "",
+      monthly_capacity: 30, weekly_capacity: 5, used_days: 18.5, over_days: null,
+      remaining_days: 11.5, reviewed: true, archived: false, projects: [] },
+    { person_id: 8, name: "文磊", skills: "", roles: "业务对接", note: "",
+      monthly_capacity: 30, weekly_capacity: null, used_days: 0, over_days: null,
+      remaining_days: null, reviewed: false, archived: false, projects: [] },
+  ],
 };
 
 function personWeek(week: string) {
@@ -117,6 +135,11 @@ beforeEach(() => {
   ]);
   getPersonWeek.mockImplementation((_id: number, week: string) => Promise.resolve(personWeek(week)));
   getProject.mockResolvedValue(project);
+  listMonthlyRoster.mockResolvedValue(roster);
+  getPersonMonth.mockResolvedValue({
+    person_id: 8, month: "2026-11", monthly_capacity: 30, used_days: 0, over_days: null,
+    remaining_days: null, reviewed: false, weeks: [], assignments: [], projects: [],
+  });
   getWorkbench.mockResolvedValue({
     week: "2026-11-02",
     week_end: "2026-11-08",
@@ -209,17 +232,17 @@ function renderProject(path: string) {
 }
 
 describe("三页同源", () => {
-  it("人员页沿用工作台选定的周与人员", async () => {
-    renderPersons("/persons?week=2026-10-26&person=8");
-    await waitFor(() => expect(getPersonWeek).toHaveBeenCalled());
-    expect(getPersonWeek).toHaveBeenCalledWith(8, "2026-10-26");
+  it("人员页沿用工作台选定的月份与人员", async () => {
+    renderPersons("/persons?month=2026-10&person=8");
+    await waitFor(() => expect(getPersonMonth).toHaveBeenCalled());
+    expect(getPersonMonth).toHaveBeenCalledWith(8, "2026-10");
   });
 
-  it("人员页切换周后按新周请求同一份汇总", async () => {
-    renderPersons("/persons?week=2026-10-26&person=8");
-    await waitFor(() => expect(getPersonWeek).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: "下一周" }));
-    await waitFor(() => expect(getPersonWeek).toHaveBeenCalledWith(8, "2026-11-02"));
+  it("人员页切换月份后按新月份请求同一份汇总", async () => {
+    renderPersons("/persons?month=2026-10&person=8");
+    await waitFor(() => expect(getPersonMonth).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("button", { name: "›" }));
+    await waitFor(() => expect(getPersonMonth).toHaveBeenCalledWith(8, "2026-11"));
   });
 
   it("项目页沿用同一个周", async () => {
@@ -241,7 +264,7 @@ describe("三页同源", () => {
     expect(screen.getByText("分配#21")).toBeTruthy();
   });
 
-  it("工作台卡片链接带上当前周，形成工作台到项目、人员的主循环", async () => {
+  it("工作台卡片链接带上当前周所在月，形成工作台到项目、人员的主循环", async () => {
     render(
       <MemoryRouter initialEntries={["/workbench"]}>
         <Routes>
@@ -252,6 +275,6 @@ describe("三页同源", () => {
     const projectLink = await screen.findByRole("link", { name: "查看项目" });
     expect(projectLink.getAttribute("href")).toBe("/projects/3?week=2026-11-02");
     const personLink = screen.getByRole("link", { name: "查看人员" });
-    expect(personLink.getAttribute("href")).toBe("/persons?week=2026-11-02&person=7");
+    expect(personLink.getAttribute("href")).toBe("/persons?month=2026-11&person=7");
   });
 });
