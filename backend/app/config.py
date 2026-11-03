@@ -9,7 +9,8 @@ from pathlib import Path
 
 COMPANY_ID = "8710e601-99d7-4604-b4e6-6781a7300541"
 PROJECT_ID = "52a8eeac-d442-420e-af14-663ffd7af0ee"
-RESOURCE_PREFIX = "pc-52a8eeac"
+# Docker 资源名前缀：容器/镜像/网络统一用它，必须与 docker-compose.yml 的 name: 一致
+RESOURCE_PREFIX = "cross-project"
 
 _DEFAULT_DATA_DIR = Path.home() / ".local/share/paperclip-project-data" / PROJECT_ID
 

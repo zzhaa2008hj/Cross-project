@@ -37,14 +37,15 @@ curl http://127.0.0.1:18330/api/health
 - **改代码后要带 `--build`**：不带会继续用旧镜像，代码改动不生效。
 - 备份也落在项目目录：`data/backups`。
 
-容器与镜像命名统一使用 `pc-52a8eeac-` 前缀：
+容器、镜像、网络统一用项目名 `cross-project`：
 
 | 资源 | 名称 |
 | --- | --- |
-| compose project | `pc-52a8eeac-develop` |
-| backend 容器 | `pc-52a8eeac-develop-backend-1` |
-| frontend 容器 | `pc-52a8eeac-develop-frontend-1` |
-| 镜像 | `pc-52a8eeac-backend:local`、`pc-52a8eeac-frontend:local` |
+| compose project | `cross-project` |
+| backend 容器 | `cross-project-backend-1` |
+| frontend 容器 | `cross-project-frontend-1` |
+| 网络 | `cross-project_default` |
+| 镜像 | `cross-project-backend:local`、`cross-project-frontend:local` |
 
 无 named volume：SQLite 落在项目目录 `data/`，容器删除不会带走数据。
 
@@ -188,4 +189,5 @@ docker compose start backend
 - 恢复过程独占库锁：应用仍在运行时恢复会被拒绝，替换期间应用也无法启动。
 - 现库本身已损坏时，回滚副本保存的是原始字节（不是有效 SQLite 快照），恢复仍会继续。
 - 早期版本的导入功能会在库里留下 `import_runs` 表；该功能已移除，遗留表不再被读写（不影响运行）。
-- 本机预览用 compose 默认网络（`pc-52a8eeac-develop_default`），与正式 QA 容器互不相通；nginx 反代指向服务名 `backend`，该网络内唯一。改服务名时记得同步改 `frontend/nginx.conf`。
+- 本机预览用 compose 默认网络（`cross-project_default`），与正式 QA 容器互不相通；nginx 反代指向服务名 `backend`，该网络内唯一。改服务名时记得同步改 `frontend/nginx.conf`。
+- `data/` 必须由宿主用户先 `mkdir -p data` 再起容器：若目录不存在而由 Docker 自动创建，会是 root 属主，容器以 `1000:1000` 运行时报 `PermissionError: /data/sqlite`。修法：`docker compose down` 后把目录改回宿主属主（数据为空时 `rmdir data && mkdir data`），并重建容器（容器仍持有旧目录 inode，只改属主不重建无效）。

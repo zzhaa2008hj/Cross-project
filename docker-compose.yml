@@ -1,11 +1,11 @@
 # 本机自用预览：http://127.0.0.1:18330
 # 数据全部落在项目目录 ./data（SQLite 库 + 每日备份），删容器不影响数据。
-name: pc-52a8eeac-develop
+name: cross-project
 
 services:
   backend:
     build: ./backend
-    image: pc-52a8eeac-backend:local
+    image: cross-project-backend:local
     restart: unless-stopped
     # 用宿主用户身份跑，避免在项目目录里写出 root 属主的文件
     user: "1000:1000"
@@ -18,7 +18,7 @@ services:
 
   frontend:
     build: ./frontend
-    image: pc-52a8eeac-frontend:local
+    image: cross-project-frontend:local
     restart: unless-stopped
     depends_on:
       backend:
