@@ -32,6 +32,8 @@ from .schemas import (
     MilestoneOut,
     MilestoneUpdate,
     MonthPersonDetail,
+    MonthPersonRow,
+    MonthRosterOut,
     PersonCreate,
     PersonOut,
     PersonUpdate,
@@ -709,6 +711,16 @@ def set_person_week_review(
 
 
 # ------------------------------------------------------------------ 人员月度视图
+
+
+@router.get("/persons/roster", response_model=MonthRosterOut)
+def get_monthly_roster(
+    month: str = Query(...),
+    include_archived: bool = False,
+    db: Session = Depends(get_db),
+):
+    """某月的人员总表（只读）。"""
+    return monthly_service.roster(db, month, include_archived)
 
 
 @router.get("/persons/{person_id}/month", response_model=MonthPersonDetail)

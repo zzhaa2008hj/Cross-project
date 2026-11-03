@@ -22,7 +22,10 @@ def validate_days(value):
         raise ValueError("人天必须是有限数字")
     try:
         days = float(value)
-    except (TypeError, ValueError):
+    # OverflowError 不是 ValueError 的子类：400 位整数的字面量会让 float() 抛
+    # OverflowError，而 Pydantic v2 只把 ValueError/AssertionError 转成校验错误，
+    # 漏在这里的输入会直接逃成 500。转不成浮点数的一律 422。
+    except (TypeError, ValueError, OverflowError):
         raise ValueError("人天必须是数字") from None
     if not math.isfinite(days):
         raise ValueError("人天必须是有限数字")
@@ -489,6 +492,36 @@ class MonthPersonDetail(BaseModel):
     weeks: list[MonthWeekOut] = []
     assignments: list[AssignmentOut] = []
     projects: list[MonthProjectUse] = []
+
+
+class MonthPersonRow(BaseModel):
+    """人员总表的一行：资料字段 + 月度汇总 + 参与项目。
+
+    weekly_capacity 是详情区「资料」标签页唯一缺的那个字段，并进来省一次
+    `api.listPersons()` 往返；周口径允许未知（None），与月度核定人天必填不同。
+    """
+
+    person_id: int
+    name: str
+    skills: str
+    roles: str
+    note: str
+    monthly_capacity: float
+    weekly_capacity: float | None = None
+    used_days: float
+    over_days: float | None
+    remaining_days: float | None
+    reviewed: bool
+    archived: bool
+    projects: list[MonthProjectUse] = []
+
+
+class MonthRosterOut(BaseModel):
+    """某个自然月的人员总表（只读）。weeks 是该月「周一落在该月」的周键升序。"""
+
+    month: str
+    weeks: list[str] = []
+    people: list[MonthPersonRow] = []
 
 
 # ------------------------------------------------------------------ E3 工作台

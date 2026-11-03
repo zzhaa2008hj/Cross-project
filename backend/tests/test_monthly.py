@@ -1,6 +1,10 @@
 from datetime import date
 
+import pytest
+from fastapi import HTTPException
+
 from app.models import Allocation, Assignment, Person, Project, WeekReview
+from app.services import monthly as monthly_service
 from tests.conftest import make_milestone
 
 
@@ -185,3 +189,150 @@ def test_person_month_invalid_month_returns_400(client, db):
     p = _person(db)
     for bad in ("2026-13", "2026-1", "abc", ""):
         assert client.get(f"/api/persons/{p.id}/month", params={"month": bad}).status_code == 400
+
+
+# ------------------------------------------------------------------ Task 3：人员总表 roster
+
+
+def _roster(client, month="2026-11", include_archived=False):
+    r = client.get(
+        "/api/persons/roster",
+        params={"month": month, "include_archived": include_archived},
+    )
+    assert r.status_code == 200
+    return r.json()
+
+
+def test_roster_lists_active_people_sorted_by_name(client, db):
+    a = _person(db, "张三2")
+    b = _person(db, "傅相杰")
+    body = _roster(client)
+    assert [p["name"] for p in body["people"]] == ["傅相杰", "张三2"]
+    assert body["month"] == "2026-11"
+    assert len(body["weeks"]) == 5
+
+
+def test_roster_excludes_archived_by_default_and_appends_at_end(client, db):
+    active = _person(db, "傅相杰")
+    dead = _person(db, "张三2")
+    dead.archived = True
+    db.commit()
+
+    assert [p["name"] for p in _roster(client)["people"]] == ["傅相杰"]
+
+    body = _roster(client, include_archived=True)
+    assert [p["name"] for p in body["people"]] == ["傅相杰", "张三2"]
+    assert body["people"][-1]["archived"] is True
+    assert body["people"][0]["archived"] is False
+
+
+def test_roster_invalid_month_returns_400(client, db):
+    for bad in ("2026-13", "2026-1", "abc", ""):
+        assert client.get("/api/persons/roster", params={"month": bad}).status_code == 400
+
+
+def test_roster_empty_month_still_lists_weeks(client, db):
+    body = _roster(client, month="2027-02")
+    assert body["people"] == []
+    assert body["weeks"] == ["2027-02-01", "2027-02-08", "2027-02-15", "2027-02-22"]
+
+
+def test_archived_person_absent_from_roster_but_detail_ok(client, db):
+    dead = _person(db, "张三2")
+    dead.archived = True
+    proj = _project(db, "贵州矿产预测")
+    _alloc(db, dead, proj, "2026-11-02", 10)
+    db.commit()
+
+    assert [p["name"] for p in _roster(client)["people"]] == []
+
+    detail = client.get(f"/api/persons/{dead.id}/month", params={"month": "2026-11"})
+    assert detail.status_code == 200
+    assert detail.json()["used_days"] == 10
+
+
+def test_roster_and_detail_agree_on_used_days(client, db):
+    p = _person(db, "傅相杰")
+    proj = _project(db, "贵州矿产预测")
+    _alloc(db, p, proj, "2026-11-02", 10)
+    _alloc(db, p, proj, "2026-11-09", 5)
+    _alloc(db, p, proj, "2026-11-30", 4.5)
+
+    from_roster = _roster(client)["people"][0]
+    from_detail = client.get(f"/api/persons/{p.id}/month", params={"month": "2026-11"}).json()
+    assert from_roster["used_days"] == from_detail["used_days"] == 19.5
+    assert from_roster["remaining_days"] == from_detail["remaining_days"]
+    assert from_roster["reviewed"] == from_detail["reviewed"]
+    assert [x["project_id"] for x in from_roster["projects"]] == [
+        x["project_id"] for x in from_detail["projects"]
+    ]
+
+
+def test_roster_projects_merge_allocation_and_assignment_with_roles(client, db):
+    p = _person(db, "傅相杰")
+    p1 = _project(db, "贵州矿产预测")
+    p2 = _project(db, "北京仓储")
+    _alloc(db, p, p1, "2026-11-02", 10)
+    db.add(Assignment(person_id=p.id, project_id=p2.id, role="项目负责人"))
+    db.add(Assignment(person_id=p.id, project_id=p2.id, role="业务对接"))
+    db.commit()
+
+    row = _roster(client)["people"][0]
+    # projects 按 project_id 升序（见本 Task Step 4 第 7 步），所以 p1 在前、p2 在后；
+    # 但仍用 id 索引，别靠位置——位置一旦写反，测试会静默通过错误的排序。
+    by_id = {u["project_id"]: u for u in row["projects"]}
+    assert by_id[p1.id] == {
+        "project_id": p1.id, "project_name": "贵州矿产预测", "roles": [],
+        "days": 10.0, "has_allocation": True, "has_assignment": False,
+    }
+    assert by_id[p2.id] == {
+        "project_id": p2.id, "project_name": "北京仓储",
+        "roles": ["项目负责人", "业务对接"],
+        "days": 0.0, "has_allocation": False, "has_assignment": True,
+    }
+    # 排序本身另钉一条：project_id 升序
+    assert [u["project_id"] for u in row["projects"]] == sorted(u["project_id"] for u in row["projects"])
+
+
+# ------------------------------------------------------------------ Task 2 审查 Minor 回归
+
+
+def test_month_primitives_pure_function_regressions():
+    """不走 HTTP，直接调月度原语：周集合与月份解析的边界。"""
+    assert monthly_service.month_weeks("2027-02") == [
+        "2027-02-01", "2027-02-08", "2027-02-15", "2027-02-22",
+    ]
+    last_weeks = monthly_service.month_weeks("9999-12")
+    assert len(last_weeks) == 4
+    assert last_weeks[-1] == "9999-12-27"
+    with pytest.raises(HTTPException) as excinfo:
+        monthly_service.parse_month("0000-01")
+    assert excinfo.value.status_code == 400
+
+
+def test_person_month_unknown_person_returns_404(client, db):
+    r = client.get("/api/persons/999999/month", params={"month": "2026-11"})
+    assert r.status_code == 404
+
+
+def test_person_month_missing_month_param_returns_422(client, db):
+    p = _person(db)
+    r = client.get(f"/api/persons/{p.id}/month")
+    assert r.status_code == 422
+
+
+def test_allocation_huge_days_returns_422_not_500(client, db):
+    """人天是 400 位整数的 JSON 字面量时必须 422：float() 会抛 OverflowError，
+    而 Pydantic v2 只把 ValueError/AssertionError 转成校验错误。"""
+    p = _person(db)
+    proj = _project(db, "贵州矿产预测")
+    r = client.post(
+        "/api/allocations",
+        json={
+            "person_id": p.id,
+            "project_id": proj.id,
+            "week": "2026-11-02",
+            "days": 10 ** 400,
+        },
+    )
+    assert r.status_code == 422

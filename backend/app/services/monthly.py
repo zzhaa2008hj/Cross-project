@@ -15,7 +15,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import Allocation, Assignment, Person, Project
-from ..schemas import MonthPersonDetail, MonthProjectUse, MonthWeekOut
+from ..schemas import (
+    MonthPersonDetail,
+    MonthPersonRow,
+    MonthProjectUse,
+    MonthRosterOut,
+    MonthWeekOut,
+)
 from . import weekly as weekly_service
 
 
@@ -103,8 +109,11 @@ def person_month(db: Session, person: Person, month: str) -> MonthPersonDetail:
     over_days = round(used_days - capacity, 4) if used_days > capacity else None
 
     # 只有「有投入的周」参与核对判定：空周没有投入可核对，不阻塞。
+    # 周级核对状态一次算全：下面 week 明细也要用，逐周重复查询会让 roster
+    # （逐人调本函数）随人数线性放大 SELECT。
     alloc_weeks = {a.week for a in allocations}
-    reviewed = all(weekly_service.is_reviewed(db, person.id, w) for w in alloc_weeks)
+    reviewed_by_week = {w: weekly_service.is_reviewed(db, person.id, w) for w in weeks}
+    reviewed = all(reviewed_by_week[w] for w in alloc_weeks)
     remaining_days = round(capacity - used_days, 4) if reviewed else None
 
     by_week: dict[date, list[Allocation]] = {}
@@ -118,7 +127,7 @@ def person_month(db: Session, person: Person, month: str) -> MonthPersonDetail:
                 week=w.isoformat(),
                 week_end=weekly_service.week_end(w).isoformat(),
                 total_days=round(sum(a.days for a in rows), 4),
-                reviewed=weekly_service.is_reviewed(db, person.id, w),
+                reviewed=reviewed_by_week[w],
                 allocations=[weekly_service.allocation_out(db, a) for a in rows],
             )
         )
@@ -135,3 +144,32 @@ def person_month(db: Session, person: Person, month: str) -> MonthPersonDetail:
         assignments=[weekly_service.assignment_out(db, a) for a in assignments],
         projects=_project_uses(db, allocations, assignments),
     )
+
+
+def roster(db: Session, month: str, include_archived: bool) -> MonthRosterOut:
+    """某个自然月的人员总表。已禁用的人排在启用的人之后（按 archived 升序）。"""
+    stmt = select(Person).order_by(Person.archived, Person.name)
+    if not include_archived:
+        stmt = stmt.where(Person.archived.is_(False))
+    people = db.execute(stmt).scalars().all()
+    rows = []
+    for person in people:
+        detail = person_month(db, person, month)   # 复用同一套汇总原语
+        rows.append(
+            MonthPersonRow(
+                person_id=person.id,
+                name=person.name,
+                skills=person.skills,
+                roles=person.roles,
+                note=person.note,
+                monthly_capacity=detail.monthly_capacity,
+                weekly_capacity=person.weekly_capacity,
+                used_days=detail.used_days,
+                over_days=detail.over_days,
+                remaining_days=detail.remaining_days,
+                reviewed=detail.reviewed,
+                archived=person.archived,
+                projects=detail.projects,
+            )
+        )
+    return MonthRosterOut(month=month, weeks=month_weeks(month), people=rows)
