@@ -1,33 +1,25 @@
 """E4：离线恢复（校验、原子替换、回滚保留）。
 
-两种恢复方式：
+``restore_sqlite``：直接用一份 SQLite 库文件替换现库，保留结构与约束。
 
-* ``restore_sqlite``：直接用一份 SQLite 库文件替换现库，保留结构与约束。
-* ``restore_json``：用导出 JSON 的数据重建一个库，结构按当前模型定义生成。
-
-两者都是离线操作：先确认应用已停（文件锁），再校验候选库，校验通过才
-原子替换现库，并保留一份回滚副本。失败时现库保持原样。
+离线操作：先确认应用已停（文件锁），再校验候选库，校验通过才原子替换现库，
+并保留一份回滚副本。失败时现库保持原样。
 """
 from __future__ import annotations
 
 import fcntl
-import json
 import os
 import shutil
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import create_engine
-
-from .export import SCHEMA_VERSION
 from .snapshot import snapshot_db
 
 __all__ = [
     "assert_app_stopped",
     "app_lock",
     "lock_path_for",
-    "restore_json",
     "restore_lock",
     "restore_sqlite",
     "validate_sqlite_candidate",
@@ -267,160 +259,6 @@ def restore_sqlite(candidate: Path, db_path: Path, stamp: str) -> dict:
         _publish(candidate, db_path)
     return {
         "restored_from": str(candidate),
-        "rollback_path": str(rollback),
-        "rollback_valid": rollback_valid,
-    }
-
-
-def _insert_rows(conn: sqlite3.Connection, table, rows: list[dict]) -> int:
-    if not rows:
-        return 0
-    names = [column.name for column in table.columns]
-    used = [name for name in names if any(name in row for row in rows)]
-    if not used:
-        return 0
-    placeholders = ", ".join("?" for _ in used)
-    columns = ", ".join(f'"{name}"' for name in used)
-    payload = [tuple(row.get(name) for name in used) for row in rows]
-    conn.executemany(
-        f'INSERT INTO "{table.name}" ({columns}) VALUES ({placeholders})', payload
-    )
-    return len(payload)
-
-
-def _validate_export_payload(payload: dict) -> dict[str, list[dict]]:
-    """校验导出载荷的结构，返回"表名 → 行列表"；结构非法时抛 ``ValueError``。
-
-    校验在动库之前完成，且只看结构不看行数：完整空库（各表 ``[]``）是本产品自己能
-    产出的合法状态（新建库备份后立刻恢复即此情形），行数不构成合法性判据。逐项：
-
-    * ``schema_version`` 存在时必须等于当前版本；
-    * ``tables`` 必须是对象，且包含当前模型的全部表；
-    * 每张表的表值必须是数组——``false``/``null``/``0``/空串/对象都不是空数据；
-    * 每行必须是对象，键必须属于该表的列（未知列拒绝，不静默丢弃）；
-    * 每行必须带齐该表的全部非空列（含主键），且值不得为 ``None``。
-
-    第 5 条不是额外的门槛：``_insert_rows`` 用裸 ``executemany`` 加显式列清单，
-    模型在 Python 侧声明的默认值不会生效，缺非空列必然触发 NOT NULL 约束失败。
-    这里提前拦下，换来的是可读的 ``ValueError`` 而不是裸 ``IntegrityError``，且
-    拒绝发生在发布之前（现库不变）。列内合法的 ``NULL``（可空列）与 ``0`` 不受影响。
-    """
-    if not isinstance(payload, dict) or "tables" not in payload:
-        raise ValueError("导出文件缺少 tables 段，不是有效的导出文件")
-
-    exported = payload.get("tables")
-    if not isinstance(exported, dict):
-        raise ValueError("导出文件的 tables 段不是对象，不是有效的导出文件")
-
-    if "schema_version" in payload and payload["schema_version"] != SCHEMA_VERSION:
-        raise ValueError(
-            f"导出文件的 schema_version 是 {payload['schema_version']!r}，"
-            f"当前恢复端只接受 {SCHEMA_VERSION}，拒绝恢复"
-        )
-
-    base = _models()
-    tables = base.metadata.sorted_tables
-    missing_tables = [table.name for table in tables if table.name not in exported]
-    if missing_tables:
-        raise ValueError(
-            "导出文件缺少必需的表：" + "、".join(missing_tables) + "，拒绝恢复（会清空现库）"
-        )
-
-    prepared: dict[str, list[dict]] = {}
-    for table in tables:
-        rows = exported[table.name]
-        if not isinstance(rows, list):
-            raise ValueError(
-                f"导出文件的表 {table.name} 不是数组（值是 {type(rows).__name__}），"
-                "拒绝恢复"
-            )
-        columns = {column.name for column in table.columns}
-        required = {column.name for column in table.columns if not column.nullable}
-        for index, row in enumerate(rows):
-            if not isinstance(row, dict):
-                raise ValueError(
-                    f"导出文件的表 {table.name} 第 {index + 1} 行不是对象（值是 "
-                    f"{type(row).__name__}），拒绝恢复"
-                )
-            unknown = sorted(set(row) - columns)
-            if unknown:
-                raise ValueError(
-                    f"导出文件的表 {table.name} 第 {index + 1} 行含未知字段："
-                    f"{'、'.join(unknown)}，拒绝恢复"
-                )
-            missing = sorted(required - set(row))
-            if missing:
-                raise ValueError(
-                    f"导出文件的表 {table.name} 第 {index + 1} 行缺少必需字段："
-                    f"{'、'.join(missing)}，拒绝恢复"
-                )
-            nulled = sorted(name for name in required if row.get(name) is None)
-            if nulled:
-                raise ValueError(
-                    f"导出文件的表 {table.name} 第 {index + 1} 行的非空字段为 NULL："
-                    f"{'、'.join(nulled)}，拒绝恢复"
-                )
-        prepared[table.name] = rows
-    return prepared
-
-
-def restore_json(source: Path, db_path: Path, stamp: str) -> dict:
-    """用导出 JSON 重建现库，保留回滚副本。
-
-    结构按当前模型定义生成（唯一约束、外键都在），数据来自导出文件。
-    导出里出现但模型里没有的表会被跳过——记为已知限制。
-    导出必须包含当前模型的全部表，否则拒绝恢复（避免用不完整的导出清空现库）。
-    完整但无数据行的导出是合法恢复源（``build_export`` 对全新空库可以正常产出）。
-    """
-    source = Path(source)
-    db_path = Path(db_path)
-    try:
-        payload = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"导出文件无法读取：{exc}") from exc
-
-    # 先把整份载荷校验完再动库：非法结构在这里被拒，现库与回滚副本都不沾边。
-    prepared = _validate_export_payload(payload)
-
-    base = _models()
-    with restore_lock(db_path):
-        tmp = db_path.parent / f".{db_path.name}.restore-json-{stamp}.tmp"
-        for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
-            if stale.exists():
-                stale.unlink()
-
-        engine = create_engine(f"sqlite:///{tmp}")
-        try:
-            base.metadata.create_all(bind=engine)
-        finally:
-            engine.dispose()
-
-        conn = sqlite3.connect(str(tmp))
-        try:
-            conn.execute("PRAGMA foreign_keys=OFF")
-            for table in base.metadata.sorted_tables:
-                _insert_rows(conn, table, prepared[table.name])
-            conn.commit()
-            problems = validate_sqlite_candidate(tmp)
-        finally:
-            conn.close()
-
-        if problems:
-            for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
-                if stale.exists():
-                    stale.unlink()
-            raise ValueError("重建后的库校验未通过：" + "；".join(problems))
-
-        rollback = _allocate_rollback_path(db_path, stamp)
-        rollback_valid = _capture_rollback(db_path, rollback)
-
-        _publish(tmp, db_path)
-        for stale in (tmp, Path(str(tmp) + "-wal"), Path(str(tmp) + "-shm")):
-            if stale.exists():
-                stale.unlink()
-
-    return {
-        "restored_from": str(source),
         "rollback_path": str(rollback),
         "rollback_valid": rollback_valid,
     }

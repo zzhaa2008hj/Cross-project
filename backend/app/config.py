@@ -1,7 +1,6 @@
-"""运行期配置：数据目录、vault 只读来源路径、导入对账预期。
+"""运行期配置：数据目录。
 
 数据目录在本项目登记的 Git 外存储，容器内通过 CP_DATA_DIR 注入。
-vault 只读挂载路径由 CP_VAULT_DIR 注入，正式写回不在当前版本范围内。
 """
 from __future__ import annotations
 
@@ -13,23 +12,6 @@ PROJECT_ID = "52a8eeac-d442-420e-af14-663ffd7af0ee"
 RESOURCE_PREFIX = "pc-52a8eeac"
 
 _DEFAULT_DATA_DIR = Path.home() / ".local/share/paperclip-project-data" / PROJECT_ID
-_DEFAULT_VAULT_DIR = Path("/home/hui/MyData/AI/my-vault")
-
-# 首版导入来源（只读）
-MILESTONE_SOURCE_REL = "20_项目/里程碑.md"
-PERSONNEL_SOURCE_REL = "99_系统/人员.md"
-PROJECT_NOTES_DIR_REL = "20_项目"
-
-# 对账预期：来自首版计划，差异必须在报告中说明
-EXPECTED_MILESTONE_COUNT = 35
-EXPECTED_MAINTENANCE_PROJECT_COUNT = 7
-
-# 产品已确认但 vault 源里尚未记录的口径，只进"待确认"，不静默推断
-BEIJING_WAREHOUSE_ROLES = {
-    "project_owner": "李冠男",
-    "executor": "郑伊平",
-    "coordinator": "赵辉辉",
-}
 
 PROJECT_STATES = ("active", "on-hold", "done", "maintenance")
 MILESTONE_STATES = (
@@ -54,16 +36,3 @@ def data_dir() -> Path:
 
 def db_path() -> Path:
     return data_dir() / "sqlite" / "crossproject.db"
-
-
-def exports_dir() -> Path:
-    """导出预览目录：优先 ``CP_EXPORT_DIR``，否则落在数据目录下的 ``exports/``。"""
-    return Path(os.environ.get("CP_EXPORT_DIR", str(data_dir() / "exports")))
-
-
-def vault_dir() -> Path:
-    return Path(os.environ.get("CP_VAULT_DIR", str(_DEFAULT_VAULT_DIR)))
-
-
-def source_path(rel: str) -> Path:
-    return vault_dir() / rel

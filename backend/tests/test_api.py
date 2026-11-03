@@ -233,30 +233,3 @@ def test_demo_seed_creates_diamond(client):
     again = client.post("/api/demo/seed").json()
     assert again["id"] == body["id"]
     assert len(again["milestones"]) == len(body["milestones"])
-
-
-def test_import_api_dry_run_then_apply(client, db, tmp_path):
-    from tests.test_importer import MILESTONE_TABLE, PERSONNEL, PROJECT_NOTE
-
-    (tmp_path / "20_项目").mkdir(parents=True)
-    (tmp_path / "99_系统").mkdir(parents=True)
-    (tmp_path / "20_项目" / "里程碑.md").write_text(MILESTONE_TABLE, encoding="utf-8")
-    (tmp_path / "99_系统" / "人员.md").write_text(PERSONNEL, encoding="utf-8")
-    (tmp_path / "20_项目" / "示例项目.md").write_text(PROJECT_NOTE, encoding="utf-8")
-
-    dry = client.post("/api/imports", json={"source_root": str(tmp_path)})
-    assert dry.status_code == 201
-    body = dry.json()
-    assert body["mode"] == "dry_run"
-    assert body["applied"] is False
-    assert body["read_count"] == body["imported_count"] + body["skipped_count"] + body["failed_count"]
-    assert db.query(Project).count() == 0
-
-    applied = client.post("/api/imports", json={"source_root": str(tmp_path), "apply": True})
-    assert applied.status_code == 201
-    assert applied.json()["applied"] is True
-    assert db.query(Project).count() == 1
-
-    md = client.get(f"/api/imports/{applied.json()['id']}/report.md")
-    assert md.status_code == 200
-    assert "读入" in md.text

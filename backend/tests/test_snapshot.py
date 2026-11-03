@@ -1,5 +1,4 @@
-"""E4 Task 1：一致性快照与导出数据读取。"""
-import base64
+"""E4 Task 1：一致性快照（sqlite3 backup API 在线复制）。"""
 import sqlite3
 import threading
 import time
@@ -7,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.snapshot import read_tables, snapshot_db, table_columns
+from app.services.snapshot import snapshot_db
 
 
 def _make_db(path: Path) -> sqlite3.Connection:
@@ -24,6 +23,14 @@ def _make_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _rows(path: Path, table: str) -> list[tuple]:
+    conn = sqlite3.connect(str(path))
+    try:
+        return conn.execute(f"SELECT * FROM {table}").fetchall()
+    finally:
+        conn.close()
+
+
 def test_snapshot_db_copies_all_tables(tmp_path):
     src = tmp_path / "src.db"
     conn = _make_db(src)
@@ -34,10 +41,9 @@ def test_snapshot_db_copies_all_tables(tmp_path):
     dest = tmp_path / "snap.db"
     assert snapshot_db(src, dest) == dest
 
-    tables = read_tables(dest)
-    assert tables["projects"][0]["name"] == "A"
-    assert "milestones" in tables
-    assert "capacities" in tables
+    assert _rows(dest, "projects") == [(1, "A")]
+    assert _rows(dest, "milestones") == []
+    assert _rows(dest, "capacities") == []
 
 
 def test_snapshot_db_refuses_to_overwrite_existing_file(tmp_path):
@@ -106,63 +112,11 @@ def test_snapshot_under_concurrent_write_is_consistent(tmp_path):
                 break
         assert snap is not None, "未能构造出快照期间存在并发写入的场景"
 
-        tables = read_tables(snap)
-        project_ids = {row["id"] for row in tables["projects"]}
-        milestones = tables["milestones"]
+        project_ids = {row[0] for row in _rows(snap, "projects")}
+        milestones = _rows(snap, "milestones")
         assert milestones, "快照里应当有数据"
-        for row in milestones:
-            assert row["project_id"] in project_ids, "快照出现了孤儿节点行"
+        for _mid, project_id, _name in milestones:
+            assert project_id in project_ids, "快照出现了孤儿节点行"
     finally:
         stop.set()
         t.join(timeout=5)
-
-
-def test_read_tables_keeps_null_and_zero_distinct(tmp_path):
-    path = tmp_path / "c.db"
-    conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE capacities (id INTEGER PRIMARY KEY, days REAL)")
-    conn.execute("INSERT INTO capacities (id, days) VALUES (1, 0.0)")
-    conn.execute("INSERT INTO capacities (id, days) VALUES (2, NULL)")
-    conn.commit()
-    conn.close()
-
-    rows = {row["id"]: row for row in read_tables(path)["capacities"]}
-    assert rows[1]["days"] == 0.0
-    assert rows[2]["days"] is None
-
-
-def test_read_tables_encodes_bytes_as_base64(tmp_path):
-    path = tmp_path / "b.db"
-    conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE blobs (id INTEGER PRIMARY KEY, payload BLOB)")
-    conn.execute("INSERT INTO blobs (id, payload) VALUES (1, ?)", (b"\x00\x01\x02",))
-    conn.commit()
-    conn.close()
-
-    row = read_tables(path)["blobs"][0]
-    assert row["payload"] == base64.b64encode(b"\x00\x01\x02").decode("ascii")
-
-
-def test_read_tables_skips_sqlite_internal_tables(tmp_path):
-    path = tmp_path / "s.db"
-    conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE projects (id INTEGER PRIMARY KEY)")
-    conn.execute("CREATE INDEX idx_projects ON projects(id)")
-    conn.commit()
-    conn.close()
-
-    tables = read_tables(path)
-    assert list(tables) == ["projects"]
-
-
-def test_table_columns_reports_primary_keys(tmp_path):
-    path = tmp_path / "p.db"
-    conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT)")
-    conn.commit()
-    conn.close()
-
-    columns = table_columns(path)
-    assert [c["name"] for c in columns["projects"]] == ["id", "name"]
-    pk = [c for c in columns["projects"] if c["pk"]]
-    assert [c["name"] for c in pk] == ["id"]

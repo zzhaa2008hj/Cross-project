@@ -2,7 +2,7 @@
 
 跨项目管理软件 · E2（人员资料、周容量与跨项目 Allocation 闭环）
 
-E1 已交付：**项目列表 → 项目详情 → 节点创建/编辑 → 依赖改期预览 → 只读源导入报告**。
+E1 已交付：**项目列表 → 项目详情 → 节点创建/编辑 → 依赖改期预览**。
 
 E2 目标：在本机浏览器完成 **人员页 → 项目页同一份 Allocation → 显式填周投入 → 定位跨项目冲突**：
 
@@ -17,14 +17,14 @@ E2 目标：在本机浏览器完成 **人员页 → 项目页同一份 Allocati
 ## 目录结构
 
 ```
-backend/     FastAPI 服务、领域服务（缓冲/改期/导入/历史/周容量与分配）、pytest 用例
-frontend/    React 单页应用（项目列表、项目详情、人员页、导入报告）
+backend/     FastAPI 服务、领域服务（缓冲/改期/历史/周容量与分配）、pytest 用例
+frontend/    React 单页应用（项目列表、项目详情、人员页、工作台）
 docker-compose.yml  本机预览编排
 ```
 
 ## Docker 预览（推荐）
 
-自用场景：数据全部落在项目目录 `./data`（SQLite、每日备份、导出预览），删容器不影响数据；端口只绑回环，不对外暴露。
+自用场景：数据全部落在项目目录 `./data`（SQLite、每日备份），删容器不影响数据；端口只绑回环，不对外暴露。
 
 ```bash
 mkdir -p data            # 首次运行创建数据目录（.gitignore 已忽略）
@@ -35,8 +35,7 @@ curl http://127.0.0.1:18330/api/health
 
 - 停止：`docker compose down`（**不会**删除 `./data`）。
 - **改代码后要带 `--build`**：不带会继续用旧镜像，代码改动不生效。
-- 备份与导出产物也在项目目录：`data/backups`、`data/exports`。
-- vault 以只读方式挂到容器 `/vault`（导入来源），正式写回不在当前版本范围内。
+- 备份也落在项目目录：`data/backups`。
 
 容器与镜像命名统一使用 `pc-52a8eeac-` 前缀：
 
@@ -56,7 +55,7 @@ curl http://127.0.0.1:18330/api/health
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r backend/requirements.txt -r backend/requirements-dev.txt
 cd backend && CP_DATA_DIR=/tmp/cp-data uvicorn app.main:app --reload --port 8000
-pytest -q                      # 63 passed
+pytest -q                      # 108 passed
 
 # 前端
 cd frontend && npm ci
@@ -66,11 +65,11 @@ npm run build                  # 产物在 frontend/dist
 npm run dev                    # 开发服务器，/api 代理到 8000
 ```
 
-环境变量：`CP_DATA_DIR`（SQLite 目录，默认 `./data`）、`CP_VAULT_DIR`（只读源目录，默认仓库同级 `vault`）。
+环境变量：`CP_DATA_DIR`（SQLite 目录，默认 `./data`）。
 
 ## 功能与接口
 
-前端页面：`/`（项目列表）、`/projects/:id`（项目详情 + 节点 + 改期 + 本项目周投入分配）、`/persons`（人员资料/能力/容量/职责/周视图）、`/imports`（导入报告）。
+前端页面：`/`（项目列表）、`/projects/:id`（项目详情 + 节点 + 改期 + 本项目周投入分配）、`/persons`（人员资料/能力/容量/职责/周视图）、`/workbench`（工作台汇总）。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -83,7 +82,7 @@ npm run dev                    # 开发服务器，/api 代理到 8000
 | GET | `/api/history` | 历史记录（改期原因等） |
 | POST | `/api/reschedule/preview` | 改期预览：固定记录版本、changes、affected_not_modified、buffer |
 | POST | `/api/reschedule/apply` | 原子提交：原因必填、版本冲突 409、循环/非法日期 400 |
-| POST/GET | `/api/imports`、`/api/imports/{id}`、`/api/imports/{id}/report.md` | 只读源导入与报告 |
+| POST | `/api/backup/run` | 手动触发一次一致性备份 |
 | POST | `/api/demo/seed` | 写入验收样例（菱形依赖） |
 | GET | `/api/persons/{id}/weeks/{week}` | **人员某周全量视图**：容量、占用、超额、剩余、核对状态、分配列表（人员页与项目页共用同一份数据） |
 | PUT/DELETE | `/api/persons/{id}/weeks/{week}/capacity` | 指定周容量覆盖 / 删除覆盖（删除才回退默认） |
@@ -97,7 +96,6 @@ npm run dev                    # 开发服务器，/api 代理到 8000
 - **缓冲派生**：`W` = 开始日到承诺日的工作日数；`B = max(floor(W*0.2+0.5), 1)`；内部目标 = 承诺日 − B 个工作日（示例 2026-11-02→13：W=10、B=2、目标 11-11）。外部缓冲不可消费。
 - **改期**：先预览再提交；按新旧承诺日的**日历日差**平移传递后继，每个节点只平移一次（菱形不叠加）；已完成/已取消只列不改；空日期保留；**跨项目依赖首版不支持**；预览模式必须与提交模式一致（仅当前预览不能联动提交，整笔 400）。
 - **失败语义**：循环依赖、非法日期、记录版本变化一律**整笔拒绝**，不写半份历史。
-- **导入**：dry-run 在同一事务内应用后整体回滚，不写库；每条记录带 `source_record_hash` 与 `edited_in_app` 保护；相同快照幂等；源变化时先给差异，不覆盖软件内已编辑内容；报告含源定位、哈希、映射、互斥计数（read = imported + skipped + failed）与待确认清单。
 - **人员**：E1 不预建周投入/容量，分配执行人不产生 Allocation。
 
 ### E2 周容量与分配约定
@@ -111,18 +109,6 @@ npm run dev                    # 开发服务器，/api 代理到 8000
 - **待补充**：仅被分派、尚无 Allocation 时状态为"投入待补充"，不虚构分配；显式核对后给出剩余；任何分配改动后回到"待补充"。
 - **一致性与不重复计入**：人员页与项目页读同一份 Allocation（同一分配 ID 只计一次占用）。项目页按项目筛选时，仍完整列出该人在其他项目的冲突分配，不掩盖冲突集。maintenance 项目的分配同样计入占用。
 
-### 导入用法
-
-容器内 vault 挂载点为 `/vault`（只读）：
-
-```bash
-curl -s -X POST http://127.0.0.1:18330/api/imports \
-  -H 'content-type: application/json' \
-  -d '{"source_root": "/vault", "apply": false}'
-```
-
-`apply: false` 为 dry-run（默认，推荐）；`apply: true` 才会写入。导入只读源目录，不修改 vault。
-
 ### E2 用法
 
 1. 打开 `/persons`：左侧选人，右侧维护姓名、角色标签、能力、默认周容量；"项目职责"里给某人挂职责（不产生占用）。
@@ -131,26 +117,15 @@ curl -s -X POST http://127.0.0.1:18330/api/imports \
 4. 本周投入填完后点"本周投入已核对"，才给出精确剩余；之后任何分配改动都会回到"待补充"。
 5. 打开 `/projects/:id`：卡片"周投入分配"列出本项目全部分配（带稳定 `分配#ID`）；下方每个相关人的周视图同时显示其**其他项目**的冲突分配，便于定位跨项目冲突。
 
-## E4：导出预览、一致性备份与恢复
+## E4：一致性备份与恢复
 
-E4 交付三件事：**软件状态一致的导出预览**、**每日一致性备份与离线恢复**、**可复现的 Docker 使用路径**。
-
-### 导出预览（只读，不写回 vault）
-
-打开 `/export`：
-
-1. 点「生成导出预览」——后端对 SQLite 做在线一致性快照（`sqlite3.Connection.backup()`），JSON / Markdown / Obsidian 摘要三份产物同源于该快照。
-2. 页面展示快照版本、生成时间、各表行数，以及与上一次预览的差异（新增 / 修改 / 删除）。
-3. 三个下载入口：JSON、Markdown、Obsidian 摘要。
-4. 页面顶部固定提示：**本预览只读取软件数据库，不会写回 vault 笔记或脚本。**
-
-预览产物落在数据目录的 `exports/`（容器内 `/data/exports`），可用 `CP_EXPORT_DIR` 覆盖。
+E4 交付两件事：**每日一致性备份与离线恢复**、**可复现的 Docker 使用路径**。
 
 ### 每日一致性备份
 
 - 服务启动后起一个后台线程，按固定间隔做一次一致性备份（默认 24 小时，可用 `CP_BACKUP_INTERVAL_HOURS` 调整；`CP_BACKUP_ENABLED=0` 整体关闭）。
-- 备份目录：容器内 `/data/backups`，即项目目录 `data/backups`（不在 vault 内）。
-- 每次备份是一个版本目录，含 `crossproject.db`（SQLite 一致性副本）、`export.json` 与 `export.md`。
+- 备份目录：容器内 `/data/backups`，即项目目录 `data/backups`。
+- 每次备份是一个版本目录，内含 `crossproject.db`（SQLite 一致性副本）。
 - 备份失败只记录日志，不影响服务运行。
 
 手动触发一次备份：
@@ -172,13 +147,8 @@ docker compose run --rm --no-deps backend python -m app.backup_cli backup \
 # 2) 恢复前先停应用（否则会被库锁拒绝），恢复完再起
 docker compose stop backend
 
-# 3) 从 JSON 恢复（按当前模型重建库结构并写入数据）
-docker compose run --rm --no-deps backend python -m app.backup_cli restore --type json \
-  --source /data/backups/<版本>/export.json \
-  --db /data/sqlite/crossproject.db
-
-# 4) 从 SQLite 副本恢复（原子替换）
-docker compose run --rm --no-deps backend python -m app.backup_cli restore --type sqlite \
+# 3) 从 SQLite 副本恢复（原子替换）
+docker compose run --rm --no-deps backend python -m app.backup_cli restore \
   --source /data/backups/<版本>/crossproject.db \
   --db /data/sqlite/crossproject.db
 
@@ -198,26 +168,24 @@ docker compose start backend
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `CP_BACKUP_DIR` | `data/backups`（项目目录） | 备份根目录 |
-| `CP_EXPORT_DIR` | `<数据目录>/exports` | 导出预览产物目录 |
 | `CP_BACKUP_ENABLED` | `1` | `0` 关闭每日备份调度 |
 | `CP_BACKUP_INTERVAL_HOURS` | `24` | 备份间隔（小时） |
 
 ## 已知限制（E2 范围外）
 
 - 工作台 / 跨项目人力视图 → E3
-- 跨项目依赖、正式写回 vault 需产品单次切换决定（E4 只准备精确文件范围/托管区块/备份回滚方案，未切换）
+- 跨项目依赖、正式写回 vault 需产品单次切换决定（当前版本未启用）
 - E2 只做当前周视图；历史周可查（按周键请求）但无趋势图与批量编辑
 
 ### E4 已知限制
 
-- 正式写回 vault（覆盖笔记/脚本）**未启用**：本版只提供导出预览与精确文件范围/托管区块/备份回滚方案，是否切换由产品单次决定。
-- 预览差异只统计新增/修改/删除的行数，不做字段级 diff 展示。
-- 每日备份调度在应用进程内运行；进程不运行时不会有备份，需要靠外部定时任务补位。
 - 备份保留策略未实现：历史备份目录不会自动清理，需人工清理。
+- 每日备份调度在应用进程内运行；进程不运行时不会有备份，需要靠外部定时任务补位。
 - 本机单用户场景，未做并发写入下的冲突消解（写库仍以单实例运行为前提）。
 - 离线恢复不直接复制候选 `.db` 主文件：发布前先用备份 API 折一份自洽快照（`sqlite3.Connection.backup()`），候选库 `-wal` 中已提交但尚未 checkpoint 的数据会一并并入发布库，事务边界完整，不会丢已提交数据。
 - 备份版本号精确到秒，同一秒内重复触发会自动追加 `-2`、`-3` 序号；并发触发时各自抢不同版本号，发布冲突会自动重试；显式指定版本号的 CLI 仍然拒绝覆盖既有备份。
-- 恢复校验要求候选 `.db` 含当前模型的**全部列**：早于当前版本的备份请走 JSON 恢复路径（按当前模型重建结构）。JSON 恢复还要求导出文件包含当前模型的**全部表**，缺表一律拒绝（避免用不完整的导出清空现库）；**完整但没有任何数据行的导出是合法恢复源**——全新库备份后立即恢复就是这种情形，行数不构成合法性判据。
+- 恢复校验要求候选 `.db` 含当前模型的**全部列**：早于当前版本的备份不能直接恢复，需另存数据后重建。
 - 恢复过程独占库锁：应用仍在运行时恢复会被拒绝，替换期间应用也无法启动。
 - 现库本身已损坏时，回滚副本保存的是原始字节（不是有效 SQLite 快照），恢复仍会继续。
-- 预览环境用 compose 默认网络（`pc-52a8eeac-develop_default`），与正式 QA 容器互不相通；nginx 反代指向服务名 `backend`，该网络内唯一。改服务名时记得同步改 `frontend/nginx.conf`。
+- 早期版本的导入功能会在库里留下 `import_runs` 表；该功能已移除，遗留表不再被读写（不影响运行）。
+- 本机预览用 compose 默认网络（`pc-52a8eeac-develop_default`），与正式 QA 容器互不相通；nginx 反代指向服务名 `backend`，该网络内唯一。改服务名时记得同步改 `frontend/nginx.conf`。

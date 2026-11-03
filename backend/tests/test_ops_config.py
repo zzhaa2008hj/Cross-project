@@ -24,22 +24,16 @@ def test_compose_mounts_data_from_project_dir():
     assert "./data:/data" in _mounts(_compose_text())
 
 
-def test_compose_backups_and_exports_stay_under_data_dir():
+def test_compose_backups_stay_under_data_dir():
     text = _compose_text()
 
     assert "CP_BACKUP_DIR: /data/backups" in text
-    assert "CP_EXPORT_DIR: /data/exports" in text
-    # 备份/导出不再单独挂载，全部落在 ./data 内
+    # 备份不再单独挂载，全部落在 ./data 内
     assert not any(m.endswith(":/backups") for m in _mounts(text))
-
-
-def test_compose_mounts_vault_read_only():
-    vault = [m for m in _mounts(_compose_text()) if "/vault" in m]
-
-    assert len(vault) == 1, f"vault 只应有只读来源挂载：{vault}"
-    assert vault[0].endswith(":ro")
-    # 数据不得写进 vault
-    assert ":/vault" not in [m for m in _mounts(_compose_text()) if not m.endswith(":ro")]
+    # 导入导出功能已移除：不得再挂 vault，也不得再配置导出目录
+    assert not any("/vault" in m for m in _mounts(text))
+    assert "CP_EXPORT_DIR" not in text
+    assert "CP_VAULT_DIR" not in text
 
 
 def test_compose_runs_backend_as_host_user():

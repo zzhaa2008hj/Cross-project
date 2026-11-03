@@ -1,10 +1,7 @@
 import type {
   Allocation,
   Assignment,
-  ExportPreview,
-  ExportPreviewItem,
   HistoryEntry,
-  ImportReport,
   Meta,
   Milestone,
   Person,
@@ -204,24 +201,6 @@ export const api = {
       body: body(payload),
     }),
 
-  runImport: (payload: { source_root?: string | null; apply: boolean }) =>
-    request<ImportReport>("/imports", { method: "POST", body: body(payload) }),
-  listImports: () => request<ImportReport[]>("/imports"),
-  getImport: (id: number) => request<ImportReport>(`/imports/${id}`),
-  importMarkdown: async (id: number) => {
-    const res = await fetch(`${BASE}/imports/${id}/report.md`);
-    if (!res.ok) throw new ApiError(res.status, "读取导入报告失败");
-    return res.text();
-  },
-
   seedDemo: () => request<Project>("/demo/seed", { method: "POST" }),
-
-  // E4：导出预览（只读软件数据库，不写回 vault）
-  createExportPreview: () => request<ExportPreview>("/export/preview", { method: "POST" }),
-  listExportPreviews: () => request<{ items: ExportPreviewItem[] }>("/export/previews"),
 };
 
-/** 预览产物的下载地址：json / markdown / obsidian。 */
-export function exportPreviewUrl(previewId: string, kind: "json" | "markdown" | "obsidian"): string {
-  return `${BASE}/export/previews/${previewId}/${kind}`;
-}

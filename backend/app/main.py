@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import router
-from .api_export import router as export_router
+from .api_backup import router as backup_router
 from .config import db_path
 from .db import init_db
 from .services.restore import app_lock
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="跨项目管理软件 E2",
-    description="项目/节点、依赖改期预览、只读源导入报告、人员周容量与跨项目分配",
+    description="项目/节点、依赖改期预览、人员周容量与跨项目分配",
     version="0.1.0",
 )
 
@@ -52,4 +52,4 @@ def _shutdown() -> None:
 
 
 app.include_router(router)
-app.include_router(export_router)
+app.include_router(backup_router)

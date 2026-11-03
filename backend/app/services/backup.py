@@ -1,11 +1,10 @@
 """E4：每日一致性备份与原子发布。
 
-备份先写 staging 目录，全部成功后再整体 rename 发布；任何一步失败都删掉 staging，
-不留下半份已发布备份。备份根目录在本项目登记的 Git 外存储，绝不落在 vault 内。
+备份就是 SQLite 一致性副本（``sqlite3.Connection.backup()``），先写 staging 目录，
+全部成功后再整体 rename 发布；任何一步失败都删掉 staging，不留下半份已发布备份。
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import uuid
@@ -13,7 +12,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..config import data_dir
-from .export import build_export, render_markdown, render_obsidian_summary
 from .snapshot import snapshot_db
 
 __all__ = [
@@ -26,9 +24,6 @@ __all__ = [
 ]
 
 DB_NAME = "crossproject.db"
-JSON_NAME = "export.json"
-MARKDOWN_NAME = "export.md"
-OBSIDIAN_NAME = "obsidian.md"
 
 
 def backup_root() -> Path:
@@ -92,18 +87,7 @@ def run_backup(db_path: Path, backup_root: Path, stamp: str | None = None) -> di
     staging.mkdir(parents=True)
 
     try:
-        snapshot = snapshot_db(db_path, staging / DB_NAME)
-        export = build_export(snapshot)
-        (staging / JSON_NAME).write_text(
-            json.dumps(export, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
-        (staging / MARKDOWN_NAME).write_text(
-            render_markdown(export), encoding="utf-8"
-        )
-        (staging / OBSIDIAN_NAME).write_text(
-            render_obsidian_summary(export), encoding="utf-8"
-        )
+        snapshot_db(db_path, staging / DB_NAME)
         try:
             os.replace(staging, published)
         except OSError as exc:
@@ -116,11 +100,6 @@ def run_backup(db_path: Path, backup_root: Path, stamp: str | None = None) -> di
     return {
         "stamp": stamp,
         "db_path": str(published / DB_NAME),
-        "json_path": str(published / JSON_NAME),
-        "markdown_path": str(published / MARKDOWN_NAME),
-        "obsidian_path": str(published / OBSIDIAN_NAME),
-        "counts": export["counts"],
-        "snapshot_id": export["snapshot_id"],
     }
 
 

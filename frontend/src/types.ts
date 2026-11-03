@@ -168,34 +168,6 @@ export interface ReschedulePreview {
   versions: Record<string, number>;
 }
 
-export interface ImportRecord {
-  kind: string;
-  source_ref: string;
-  source_hash: string;
-  status: "import" | "skip" | "fail";
-  reason: string;
-  mapping: Record<string, string>;
-  diff: { field: string; old_value: string | null; new_value: string | null }[];
-}
-
-export interface ImportReport {
-  id: number;
-  snapshot_hash: string;
-  mode: string;
-  read_count: number;
-  imported_count: number;
-  skipped_count: number;
-  failed_count: number;
-  applied: boolean;
-  sources: { rel: string; sha256: string; bytes: number; lines: number; exists?: boolean }[];
-  records: ImportRecord[];
-  pending: { ref: string; field: string; raw: string; reason: string }[];
-  diffs: { kind?: string; key?: string; field: string; old_value: string | null; new_value: string | null }[];
-  reconciliation: Record<string, number | string>;
-  report_markdown: string;
-  created_at: string;
-}
-
 // E3：工作台汇总。只读，与人员页共用同一份 Allocation ID。
 export interface WorkbenchTodoItem {
   kind: string;
@@ -280,34 +252,4 @@ export interface Meta {
   milestone_states: string[];
   buffer_sources: string[];
   allocation_supported: boolean;
-}
-
-// E4：导出预览
-export interface ExportDiffTable {
-  added: number;
-  removed: number;
-  changed: number;
-  ids: string[];
-}
-
-export interface ExportDiff {
-  is_first: boolean;
-  tables: Record<string, ExportDiffTable>;
-}
-
-export interface ExportPreview {
-  preview_id: string;
-  generated_at: string;
-  snapshot_id: string;
-  counts: Record<string, number>;
-  diff: ExportDiff;
-  markdown: string;
-  obsidian: string;
-}
-
-export interface ExportPreviewItem {
-  preview_id: string;
-  generated_at: string;
-  snapshot_id: string;
-  counts: Record<string, number>;
 }

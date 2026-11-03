@@ -13,7 +13,6 @@ from .models import (
     Allocation,
     Assignment,
     HistoryEntry,
-    ImportRun,
     Milestone,
     MilestoneDependency,
     Person,
@@ -29,9 +28,6 @@ from .schemas import (
     AssignmentOut,
     AssignmentUpdate,
     HistoryOut,
-    ImportRecordOut,
-    ImportReportOut,
-    ImportRequest,
     MilestoneCreate,
     MilestoneOut,
     MilestoneUpdate,
@@ -51,7 +47,6 @@ from .schemas import (
 )
 from .services import buffer as buffer_service
 from .services import history as history_service
-from .services import importer as importer_service
 from .services import reschedule as reschedule_service
 from .services import weekly as weekly_service
 from .services import workbench as workbench_service
@@ -98,10 +93,7 @@ def meta() -> dict:
         "project_states": list(config.PROJECT_STATES),
         "milestone_states": list(config.MILESTONE_STATES),
         "terminal_milestone_states": list(config.TERMINAL_MILESTONE_STATES),
-        "expected_milestone_count": config.EXPECTED_MILESTONE_COUNT,
-        "expected_maintenance_project_count": config.EXPECTED_MAINTENANCE_PROJECT_COUNT,
         "allocation_supported": True,
-        "vault_available": config.vault_dir().exists(),
     }
 
 
@@ -542,104 +534,6 @@ def reschedule_apply(payload: RescheduleApply, db: Session = Depends(get_db)):
         return reschedule_service.apply_preview(db, payload.preview_id, payload.reason, payload.mode)
     except reschedule_service.RescheduleError as exc:
         raise HTTPException(status_code=exc.status_code, detail={"message": exc.message, **exc.detail})
-
-
-# ------------------------------------------------------------------ 导入
-
-
-@router.post("/imports", response_model=ImportReportOut, status_code=201)
-def run_import(payload: ImportRequest, db: Session = Depends(get_db)):
-    """默认 dry-run（不写库）；apply=true 才真正导入。"""
-    from pathlib import Path
-
-    root = Path(payload.source_root).expanduser() if payload.source_root else config.vault_dir()
-    if not root.exists():
-        raise HTTPException(status_code=400, detail=f"源目录不存在：{root}")
-    snapshot = importer_service.build_snapshot(root)
-    apply = False
-    if payload.apply:
-        apply = True
-    if apply:
-        result = importer_service.apply_snapshot(db, snapshot)
-    else:
-        result = importer_service.dry_run_snapshot(db, snapshot)
-    report = importer_service.build_report(
-        db,
-        snapshot,
-        apply,
-        result["records"],
-        result["pending"],
-        result["diffs"],
-        result["counts"],
-        result.get("totals"),
-    )
-    markdown = importer_service.render_markdown(report, apply)
-    run = importer_service.save_import_run(db, report, apply, markdown)
-    return _import_run_out(run, report)
-
-
-def _import_run_out(run: ImportRun, report: dict) -> ImportReportOut:
-    return ImportReportOut(
-        id=run.id,
-        snapshot_hash=run.snapshot_hash,
-        mode=run.mode,
-        read_count=run.read_count,
-        imported_count=run.imported_count,
-        skipped_count=run.skipped_count,
-        failed_count=run.failed_count,
-        applied=run.applied,
-        sources=report["sources"],
-        records=[
-            ImportRecordOut(
-                kind=r["kind"],
-                source_ref=r["source_ref"],
-                source_hash=r["source_hash"],
-                status=r["status"],
-                reason=r.get("reason", ""),
-                mapping=r.get("mapping") or {},
-                diff=r.get("diff") or [],
-            )
-            for r in report["records"]
-        ],
-        pending=report["pending"],
-        diffs=report["diffs"],
-        reconciliation=report["reconciliation"],
-        report_markdown=run.report_markdown,
-        created_at=run.created_at,
-    )
-
-
-@router.get("/imports", response_model=list[ImportReportOut])
-def list_imports(limit: int = Query(default=20, le=100), db: Session = Depends(get_db)):
-    rows = db.execute(select(ImportRun).order_by(ImportRun.id.desc()).limit(limit)).scalars().all()
-    out = []
-    for run in rows:
-        import json as _json
-
-        report = _json.loads(run.report_json)
-        out.append(_import_run_out(run, report))
-    return out
-
-
-@router.get("/imports/{run_id}", response_model=ImportReportOut)
-def get_import(run_id: int, db: Session = Depends(get_db)):
-    run = db.get(ImportRun, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="导入记录不存在")
-    import json as _json
-
-    report = _json.loads(run.report_json)
-    return _import_run_out(run, report)
-
-
-@router.get("/imports/{run_id}/report.md")
-def get_import_markdown(run_id: int, db: Session = Depends(get_db)):
-    run = db.get(ImportRun, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="导入记录不存在")
-    from fastapi.responses import PlainTextResponse
-
-    return PlainTextResponse(run.report_markdown, media_type="text/markdown; charset=utf-8")
 
 
 # ------------------------------------------------------------------ 验收样例

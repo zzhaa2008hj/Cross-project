@@ -4,7 +4,6 @@ import tempfile
 # 必须在导入 app.* 之前设置，engine 在导入期读取路径
 _TMP = tempfile.mkdtemp(prefix="cp-e1-test-")
 os.environ["CP_DATA_DIR"] = _TMP
-os.environ.setdefault("CP_VAULT_DIR", "/home/hui/MyData/AI/my-vault")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

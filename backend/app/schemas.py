@@ -286,46 +286,6 @@ class RescheduleApply(BaseModel):
         return v
 
 
-# ---------- 导入 ----------
-
-
-class ImportRequest(BaseModel):
-    source_root: str | None = None
-    apply: bool = False  # 默认 False：dry-run 不写库
-
-
-class ImportRecordOut(BaseModel):
-    kind: str
-    source_ref: str
-    source_hash: str
-    status: str  # import | skip | fail
-    reason: str
-    mapping: dict
-    diff: list[dict] = []
-
-
-class ImportReportOut(BaseModel):
-    id: int
-    snapshot_hash: str
-    mode: str
-    read_count: int
-    imported_count: int
-    skipped_count: int
-    failed_count: int
-    applied: bool
-    sources: list[dict]
-    records: list[ImportRecordOut]
-    pending: list[dict]
-    diffs: list[dict]
-    reconciliation: dict
-    report_markdown: str
-    created_at: datetime
-
-
-ProjectDetail.model_rebuild()
-MilestoneOut.model_rebuild()
-
-
 # ---------- E2：职责 / 容量 / 分配 / 核对 ----------
 
 

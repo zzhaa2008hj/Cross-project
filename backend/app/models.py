@@ -145,22 +145,6 @@ class HistoryEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
-class ImportRun(Base):
-    __tablename__ = "import_runs"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    snapshot_hash: Mapped[str] = mapped_column(String(64))
-    mode: Mapped[str] = mapped_column(String(16))  # dry_run | apply
-    read_count: Mapped[int] = mapped_column(Integer, default=0)
-    imported_count: Mapped[int] = mapped_column(Integer, default=0)
-    skipped_count: Mapped[int] = mapped_column(Integer, default=0)
-    failed_count: Mapped[int] = mapped_column(Integer, default=0)
-    report_json: Mapped[str] = mapped_column(Text, default="")
-    report_markdown: Mapped[str] = mapped_column(Text, default="")
-    applied: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-
-
 class Assignment(Base):
     """项目职责：只记录"谁在项目里担什么角色"，不产生任何占用。"""
 

@@ -1,5 +1,5 @@
 # 本机自用预览：http://127.0.0.1:18330
-# 数据全部落在项目目录 ./data（SQLite、每日备份、导出预览），删容器不影响数据。
+# 数据全部落在项目目录 ./data（SQLite 库 + 每日备份），删容器不影响数据。
 name: pc-52a8eeac-develop
 
 services:
@@ -11,15 +11,10 @@ services:
     user: "1000:1000"
     environment:
       CP_DATA_DIR: /data
-      CP_VAULT_DIR: /vault
       CP_BACKUP_DIR: /data/backups
-      CP_EXPORT_DIR: /data/exports
       PYTHONUNBUFFERED: "1"
     volumes:
-      # 数据、备份、导出预览都在项目目录内
       - ./data:/data
-      # vault 只读来源（正式写回不在当前版本范围内）
-      - ../../my-vault:/vault:ro
 
   frontend:
     build: ./frontend

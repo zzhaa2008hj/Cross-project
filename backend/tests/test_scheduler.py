@@ -59,7 +59,7 @@ def test_run_scheduled_backup_publishes_backup(tmp_path, monkeypatch):
 
     assert summary is not None
     assert summary["stamp"]
-    assert (backups / summary["stamp"] / "export.json").exists()
+    assert (backups / summary["stamp"] / "crossproject.db").exists()
 
 
 def test_run_scheduled_backup_reuses_free_stamp_when_version_taken(tmp_path, monkeypatch):
@@ -75,7 +75,7 @@ def test_run_scheduled_backup_reuses_free_stamp_when_version_taken(tmp_path, mon
 
     assert first is not None and second is not None
     assert first["stamp"] != second["stamp"]
-    assert (backups / second["stamp"] / "export.json").exists()
+    assert (backups / second["stamp"] / "crossproject.db").exists()
 
 
 def test_run_scheduled_backup_swallows_failure(tmp_path, monkeypatch):

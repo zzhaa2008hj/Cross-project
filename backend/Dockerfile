@@ -4,9 +4,7 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     CP_DATA_DIR=/data \
-    CP_VAULT_DIR=/vault \
-    CP_BACKUP_DIR=/data/backups \
-    CP_EXPORT_DIR=/data/exports
+    CP_BACKUP_DIR=/data/backups
 
 WORKDIR /app
 
