@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { ErrorBanner, Field, Loading, errorMessage } from "../components/common";
@@ -39,8 +39,18 @@ interface ProfilePanelProps {
  * 「资料」标签页：六项资料全部取自选中的 roster 行，不另调 listPersons。
  * 核定人天必填，走 parseDays（Number("") 会把空值静默变成 0）；
  * 默认周容量可留空 = 未知，用 parseCapacityDays 区分「空」与「非法」。
+ *
+ * roster 重拉后选中行是**新对象**（person_id 不变）⇒ key 不变、组件不重挂载，
+ * 六个输入框会留着旧值，此时点「保存资料」等于把旧值写回服务端，静默覆盖别人刚改的数据。
+ * 所以维护「上次见到的服务端快照」+「用户改过没有」：快照变了且没改过 ⇒ 用服务端最新值重置；
+ * 快照变了但改过 ⇒ 保留用户未保存的输入，交由用户自己决定存不存。
  */
+function profileSnapshot(row: MonthPersonRow): string {
+  return JSON.stringify([row.name, row.monthly_capacity, row.weekly_capacity, row.skills, row.roles, row.note]);
+}
+
 function ProfilePanel({ row, onSaved }: ProfilePanelProps) {
+  const snapshot = profileSnapshot(row);
   const [name, setName] = useState(row.name);
   const [capacity, setCapacity] = useState(String(row.monthly_capacity));
   const [weekly, setWeekly] = useState(row.weekly_capacity == null ? "" : String(row.weekly_capacity));
@@ -49,6 +59,32 @@ function ProfilePanel({ row, onSaved }: ProfilePanelProps) {
   const [note, setNote] = useState(row.note);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 用户改过没有：dirty 时 roster 重拉不许覆盖输入框里的未保存内容。
+  const [dirty, setDirty] = useState(false);
+  // 上次见到的服务端快照：用来识别「roster 重拉后选中行是新对象、值也变了」。
+  const [seen, setSeen] = useState(snapshot);
+
+  useEffect(() => {
+    if (seen === snapshot) return; // 服务端值没变，不动表单
+    setSeen(snapshot);
+    if (dirty) return; // 用户还没保存的输入优先，不覆盖
+    setName(row.name);
+    setCapacity(String(row.monthly_capacity));
+    setWeekly(row.weekly_capacity == null ? "" : String(row.weekly_capacity));
+    setSkills(row.skills);
+    setRoles(row.roles);
+    setNote(row.note);
+  }, [snapshot, seen, dirty, row]);
+
+  /** 任一输入被改动就置 dirty。 */
+  const onEdit = useCallback(
+    (set: (value: string) => void) =>
+      (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        setDirty(true);
+        set(event.target.value);
+      },
+    [],
+  );
 
   async function save() {
     const trimmedName = name.trim();
@@ -79,6 +115,7 @@ function ProfilePanel({ row, onSaved }: ProfilePanelProps) {
         roles: roles.trim(),
         note: note.trim(),
       });
+      setDirty(false);
       onSaved();
     } catch (e) {
       // 失败时保留已填内容，方便改完重试。
@@ -97,7 +134,7 @@ function ProfilePanel({ row, onSaved }: ProfilePanelProps) {
             aria-label="姓名"
             value={name}
             disabled={busy}
-            onChange={(e) => setName(e.target.value)}
+            onChange={onEdit(setName)}
           />
         </Field>
         <Field label="核定人天">
@@ -107,7 +144,7 @@ function ProfilePanel({ row, onSaved }: ProfilePanelProps) {
             step="0.5"
             value={capacity}
             disabled={busy}
-            onChange={(e) => setCapacity(e.target.value)}
+            onChange={onEdit(setCapacity)}
           />
         </Field>
         <Field label="默认周容量" hint="周口径用，工作台/项目页按周看">
@@ -117,7 +154,7 @@ function ProfilePanel({ row, onSaved }: ProfilePanelProps) {
             step="0.5"
             value={weekly}
             disabled={busy}
-            onChange={(e) => setWeekly(e.target.value)}
+            onChange={onEdit(setWeekly)}
           />
         </Field>
         <Field label="能力标签">
@@ -125,7 +162,7 @@ function ProfilePanel({ row, onSaved }: ProfilePanelProps) {
             aria-label="能力标签"
             value={skills}
             disabled={busy}
-            onChange={(e) => setSkills(e.target.value)}
+            onChange={onEdit(setSkills)}
           />
         </Field>
         <Field label="角色标签">
@@ -133,7 +170,7 @@ function ProfilePanel({ row, onSaved }: ProfilePanelProps) {
             aria-label="角色标签"
             value={roles}
             disabled={busy}
-            onChange={(e) => setRoles(e.target.value)}
+            onChange={onEdit(setRoles)}
           />
         </Field>
         <Field label="备注">
@@ -142,7 +179,7 @@ function ProfilePanel({ row, onSaved }: ProfilePanelProps) {
             rows={3}
             value={note}
             disabled={busy}
-            onChange={(e) => setNote(e.target.value)}
+            onChange={onEdit(setNote)}
           />
         </Field>
       </div>

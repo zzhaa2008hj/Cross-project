@@ -358,7 +358,12 @@ describe("人员页", () => {
     fireEvent.click(await screen.findByText("傅相杰"));
 
     fireEvent.click(screen.getByRole("tab", { name: "资料" }));
-    expect(screen.getByLabelText("默认周容量")).toBeTruthy();
+    // getByLabelText **不过滤 hidden 元素**，而资料面板是常驻挂载 + hidden 切页：
+    // 旧的 getByLabelText("默认周容量") 在切页前后都能命中，等于没断言。
+    // 改成「选中态」+「可见性」两条（getByRole 默认排除 hidden 元素）。
+    expect(screen.getByRole("tab", { name: "资料" }).getAttribute("aria-selected")).toBe("true");
+    // type="number" 的 ARIA role 是 spinbutton，不是 textbox。
+    expect(screen.getByRole("spinbutton", { name: "默认周容量" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("tab", { name: "项目职责" }));
     expect(screen.getByRole("button", { name: "添加职责" })).toBeTruthy();
@@ -381,6 +386,10 @@ describe("人员页", () => {
     const hits = await screen.findAllByText(/待核对/);
     expect(hits.length).toBeGreaterThanOrEqual(1);
     expect(hits.some((el) => (el.textContent ?? "").includes("核定"))).toBe(true);
+    // 逐字契约（待核对分支）：汇总条是唯一一个含「核定」的命中，它的 textContent 就是整串。
+    expect(hits.map((el) => el.textContent)).toContain(
+      "傅相杰 · 核定 30 人天 · 本月已用 18.5 · 待核对 · 2026年11月",
+    );
   });
 
   it("资料标签页保存调 updatePerson 且带 weekly_capacity", async () => {
@@ -430,5 +439,91 @@ describe("人员页", () => {
     fireEvent.click(await screen.findByText("傅相杰"));
     // errorMessage(new Error("服务器 500")) 返回 "Error: 服务器 500"，正则匹配即可
     expect(await screen.findByText(/服务器 500/)).toBeTruthy();
+  });
+
+  it("汇总条文本逐字符合契约（剩余分支）", async () => {
+    listMonthlyRoster.mockResolvedValue(rosterActive);
+    getPersonMonth.mockResolvedValue(detailFixture);
+    renderPage();
+    fireEvent.click(await screen.findByText("傅相杰"));
+    // summaryText 是单个模板字面量 ⇒ 渲染成**一个**文本节点，getByText 精确匹配可命中。
+    expect(
+      await screen.findByText("傅相杰 · 核定 30 人天 · 本月已用 18.5 · 剩余 11.5 · 2026年11月"),
+    ).toBeTruthy();
+  });
+
+  it("roster 重拉后资料表单重置为服务端新值（编辑弹窗保存触发 reload）", async () => {
+    getPersonMonth.mockResolvedValue(detailFixture);
+    // vi.clearAllMocks() 不清 implementation ⇒ 用调用计数自己分派：
+    // 第 1 次 roster = 核定 30；第 2 次（编辑弹窗保存 ⇒ onSaved ⇒ reload）= 核定 40。
+    let rosterCall = 0;
+    listMonthlyRoster.mockImplementation(() => {
+      rosterCall += 1;
+      return Promise.resolve({
+        ...rosterActive,
+        people: [{ ...rosterActive.people[0], monthly_capacity: rosterCall <= 1 ? 30 : 40 }],
+      });
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText("傅相杰"));
+    fireEvent.click(screen.getByRole("tab", { name: "资料" }));
+    // 初值 = 服务端 30。
+    expect((screen.getByRole("spinbutton", { name: "核定人天" }) as HTMLInputElement).value).toBe("30");
+
+    // 编辑弹窗保存 ⇒ onSaved ⇒ reload ⇒ roster 重拉：person_id 不变 ⇒ key 不变 ⇒ 组件不重挂载。
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    // 等弹窗卸掉，否则「核定人天」会同时命中弹窗与资料面板两个 spinbutton。
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "编辑 · 傅相杰" })).toBeNull());
+
+    // 快照变了且表单没 dirty ⇒ 输入框重新 seed 成服务端新值 40（旧实现会留着 30）。
+    await waitFor(() =>
+      expect((screen.getByRole("spinbutton", { name: "核定人天" }) as HTMLInputElement).value).toBe("40"),
+    );
+
+    // 保存资料必须带**新**值 40，而不是组件里残留的旧值 30。
+    fireEvent.click(screen.getByRole("button", { name: "保存资料" }));
+    await waitFor(() =>
+      expect(updatePerson).toHaveBeenLastCalledWith(
+        rosterActive.people[0].person_id,
+        expect.objectContaining({ monthly_capacity: 40 }),
+      ),
+    );
+  });
+
+  it("资料表单有未保存修改时 roster 重拉不覆盖用户输入", async () => {
+    getPersonMonth.mockResolvedValue(detailFixture);
+    let rosterCall = 0;
+    listMonthlyRoster.mockImplementation(() => {
+      rosterCall += 1;
+      return Promise.resolve({
+        ...rosterActive,
+        people: [{ ...rosterActive.people[0], monthly_capacity: rosterCall <= 1 ? 30 : 40 }],
+      });
+    });
+    renderPage();
+    fireEvent.click(await screen.findByText("傅相杰"));
+    fireEvent.click(screen.getByRole("tab", { name: "资料" }));
+    // 用户把核定人天改成 20 但没保存 ⇒ dirty。
+    fireEvent.change(screen.getByRole("spinbutton", { name: "核定人天" }), { target: { value: "20" } });
+    expect((screen.getByRole("spinbutton", { name: "核定人天" }) as HTMLInputElement).value).toBe("20");
+
+    // 触发 roster 重拉（值变成 40）：用「显示已禁用」开关，避免弹窗与面板的 spinbutton 撞名。
+    fireEvent.click(screen.getByLabelText("显示已禁用"));
+    // 汇总条已经反映服务端新值 40。
+    expect(
+      await screen.findByText("傅相杰 · 核定 40 人天 · 本月已用 18.5 · 剩余 11.5 · 2026年11月"),
+    ).toBeTruthy();
+    // 但表单保留用户未保存的 20，不被服务端覆盖（否则「重置」会比原 bug 更糟）。
+    expect((screen.getByRole("spinbutton", { name: "核定人天" }) as HTMLInputElement).value).toBe("20");
+
+    // 保存时发的是用户填的 20。
+    fireEvent.click(screen.getByRole("button", { name: "保存资料" }));
+    await waitFor(() =>
+      expect(updatePerson).toHaveBeenLastCalledWith(
+        rosterActive.people[0].person_id,
+        expect.objectContaining({ monthly_capacity: 20 }),
+      ),
+    );
   });
 });
