@@ -19,6 +19,7 @@ const createAssignment = vi.fn();
 const createAllocation = vi.fn();
 const updateAllocation = vi.fn();
 const deleteAllocation = vi.fn();
+const deleteAssignment = vi.fn();
 const setWeekReview = vi.fn();
 
 // ---------- 2. vi.mock 工厂 ----------
@@ -37,6 +38,7 @@ vi.mock("../api", () => ({
     createAllocation: (...args: unknown[]) => createAllocation(...args),
     updateAllocation: (...args: unknown[]) => updateAllocation(...args),
     deleteAllocation: (...args: unknown[]) => deleteAllocation(...args),
+    deleteAssignment: (...args: unknown[]) => deleteAssignment(...args),
     setWeekReview: (...args: unknown[]) => setWeekReview(...args),
   },
   // 页面 catch 里 instanceof ApiError 靠它；**不能省**，省了整个文件 import 就炸。
@@ -120,6 +122,27 @@ const rosterWithArchived = {
       ],
     },
   ],
+};
+
+// 「本月分配」标签页用的月度明细：5 个周块，其中 11-23 / 11-30 两周未核对。
+// 周块标题是纯文本节点（周区间那处不许套 <span>），否则 getByText 匹配不到整串。
+const detailFixture = {
+  person_id: 1,
+  month: "2026-11",
+  monthly_capacity: 30,
+  used_days: 18.5,
+  over_days: null,
+  remaining_days: 11.5,
+  reviewed: true,
+  weeks: [
+    { week: "2026-11-02", week_end: "2026-11-08", total_days: 10, reviewed: true, allocations: [] },
+    { week: "2026-11-09", week_end: "2026-11-15", total_days: 8.5, reviewed: true, allocations: [] },
+    { week: "2026-11-16", week_end: "2026-11-22", total_days: 0, reviewed: true, allocations: [] },
+    { week: "2026-11-23", week_end: "2026-11-29", total_days: 0, reviewed: false, allocations: [] },
+    { week: "2026-11-30", week_end: "2026-12-06", total_days: 0, reviewed: false, allocations: [] },
+  ],
+  assignments: [],
+  projects: [],
 };
 
 afterEach(() => {
@@ -307,5 +330,105 @@ describe("人员页", () => {
     fireEvent.click(nameBtn);
     const row = nameBtn.closest("tr")!;
     expect(row.classList.contains("row-selected")).toBe(true);
+  });
+
+  it("选中某人后默认停在「本月分配」标签页", async () => {
+    listMonthlyRoster.mockResolvedValue(rosterActive);
+    getPersonMonth.mockResolvedValue(detailFixture);
+    renderPage();
+    fireEvent.click(await screen.findByText("傅相杰"));
+
+    // 选中态只能直接断言 aria-selected 属性：aria-selected 不是 getByRole 的合法选项键
+    // （写进 options 会被静默忽略，形成假阳性断言），而 role="tab" 又让 getByRole("button")
+    // 再也找不到这三个按钮。
+    expect(screen.getByRole("tab", { name: "本月分配" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "资料" }).getAttribute("aria-selected")).toBe("false");
+    expect(screen.getByRole("tab", { name: "项目职责" }).getAttribute("aria-selected")).toBe("false");
+    // 默认标签页已经把面板渲染出来了：第一周块的周区间是纯文本节点（别在里面插 <span>）。
+    // 注意：面板是挂载后异步拉 getPersonMonth 的，fireEvent.click 不排空微任务队列，
+    // 所以这里必须用等待式查询，同步查询看不到还没回来的数据。
+    expect(await screen.findByText("11-02 ~ 11-08")).toBeTruthy();
+  });
+
+  it("三个标签页可切换", async () => {
+    listMonthlyRoster.mockResolvedValue(rosterActive);
+    getPersonMonth.mockResolvedValue(detailFixture);
+    listAssignments.mockResolvedValue([]);
+    renderPage();
+    fireEvent.click(await screen.findByText("傅相杰"));
+
+    fireEvent.click(screen.getByRole("tab", { name: "资料" }));
+    expect(screen.getByLabelText("默认周容量")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("tab", { name: "项目职责" }));
+    expect(screen.getByRole("button", { name: "添加职责" })).toBeTruthy();
+  });
+
+  it("未全部核对时汇总条显示「待核对」", async () => {
+    // 汇总条读的是 roster 行，所以「待核对」要打在 roster 上，打在 detailFixture 上没用
+    listMonthlyRoster.mockResolvedValue({
+      ...rosterActive,
+      people: [{ ...rosterActive.people[0], remaining_days: null, reviewed: false }],
+    });
+    // 默认标签页是「本月分配」，面板一挂载就调 getPersonMonth——不 mock 的话它拿到
+    // undefined，渲染时 .weeks 直接抛错，那条「待核对」断言就永远等不到
+    getPersonMonth.mockResolvedValue(detailFixture);
+    renderPage();
+    fireEvent.click(await screen.findByText("傅相杰"));
+    // 页面上有 4 处「待核对」（汇总条 1 + 表格单元格 1 + 未核对周块 2）：
+    // 不能用 findByText（多匹配直接抛错），用 findAllByText 再挑出汇总条那一条——
+    // 只有它的 textContent 含「核定」字样，逐周的是独立 span，文本就两字。
+    const hits = await screen.findAllByText(/待核对/);
+    expect(hits.length).toBeGreaterThanOrEqual(1);
+    expect(hits.some((el) => (el.textContent ?? "").includes("核定"))).toBe(true);
+  });
+
+  it("资料标签页保存调 updatePerson 且带 weekly_capacity", async () => {
+    listMonthlyRoster.mockResolvedValue(rosterActive);
+    getPersonMonth.mockResolvedValue(detailFixture);
+    renderPage();
+    fireEvent.click(await screen.findByText("傅相杰"));
+    fireEvent.click(screen.getByRole("tab", { name: "资料" }));
+
+    // 「默认周容量」允许留空（= 未知），提交时转成数字或 null
+    fireEvent.change(screen.getByLabelText("默认周容量"), { target: { value: "6" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存资料" }));
+
+    expect(updatePerson).toHaveBeenCalledWith(
+      rosterActive.people[0].person_id,
+      expect.objectContaining({ weekly_capacity: 6 }),
+    );
+  });
+
+  it("项目职责标签页添加职责调 createAssignment", async () => {
+    listMonthlyRoster.mockResolvedValue(rosterActive);
+    getPersonMonth.mockResolvedValue(detailFixture);
+    listProjects.mockResolvedValue([{ id: 7, name: "北京仓储", state: "active" }]);
+    listAssignments.mockResolvedValue([]);
+    renderPage();
+    fireEvent.click(await screen.findByText("傅相杰"));
+    fireEvent.click(screen.getByRole("tab", { name: "项目职责" }));
+
+    // <option value={String(p.id)}>：写项目名或数字裸值都对不上
+    fireEvent.change(screen.getByLabelText("职责项目"), { target: { value: "7" } });
+    // 角色必须显式选：不选时提交会被拦下（空值不发请求），断言就对不上了
+    fireEvent.change(screen.getByLabelText("职责角色"), { target: { value: "节点执行" } });
+    // 这个面板没有「保存」按钮——点「添加职责」就直接发请求
+    fireEvent.click(screen.getByRole("button", { name: "添加职责" }));
+
+    expect(createAssignment).toHaveBeenCalledWith({
+      person_id: rosterActive.people[0].person_id,
+      project_id: 7,
+      role: "节点执行",
+    });
+  });
+
+  it("本月分配标签页加载失败时显示错误信息", async () => {
+    listMonthlyRoster.mockResolvedValue(rosterActive);
+    getPersonMonth.mockRejectedValue(new Error("服务器 500"));
+    renderPage();
+    fireEvent.click(await screen.findByText("傅相杰"));
+    // errorMessage(new Error("服务器 500")) 返回 "Error: 服务器 500"，正则匹配即可
+    expect(await screen.findByText(/服务器 500/)).toBeTruthy();
   });
 });
