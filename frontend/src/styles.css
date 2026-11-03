@@ -396,6 +396,24 @@ button.link,
   font-weight: 600;
 }
 
+/* 人员页「本月分配」面板：每周一块，块之间用上边框分隔 */
+.month-week-block {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.month-week-block:first-child {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.week-head {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
 .table-persons {
   table-layout: fixed;
 }
