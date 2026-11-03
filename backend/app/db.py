@@ -47,7 +47,7 @@ def init_db() -> None:
 # 这里做一次轻量补列，保证旧预览库升级后仍可用。
 _ADDED_COLUMNS = {
     "milestones": [("source_dep_names", "TEXT")],
-    "persons": [("skills", "TEXT DEFAULT ''")],
+    "persons": [("skills", "TEXT DEFAULT ''"), ("monthly_capacity", "REAL NOT NULL DEFAULT 30")],
 }
 
 

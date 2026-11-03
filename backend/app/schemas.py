@@ -22,13 +22,21 @@ def validate_days(value):
         raise ValueError("人天必须是有限数字")
     try:
         days = float(value)
-    except (TypeError, ValueError):
+    # OverflowError 不是 ValueError 的子类：400 位整数的字面量会让 float() 抛
+    # OverflowError，而 Pydantic v2 只把 ValueError/AssertionError 转成校验错误，
+    # 漏在这里的输入会直接逃成 500。转不成浮点数的一律 422。
+    except (TypeError, ValueError, OverflowError):
         raise ValueError("人天必须是数字") from None
     if not math.isfinite(days):
         raise ValueError("人天必须是有限数字")
     if days < 0:
         raise ValueError("人天不能为负数")
-    if abs(days * 2 - round(days * 2)) > 1e-9:
+    # days * 2 对极大值会溢出成 inf，round(inf) 抛 OverflowError（→ 500），
+    # 这里先判有限性，把荒谬输入挡在 422 上。
+    scaled = days * 2
+    if not math.isfinite(scaled):
+        raise ValueError("人天数值过大")
+    if abs(scaled - round(scaled)) > 1e-9:
         raise ValueError("人天粒度为 0.5")
     return days
 
@@ -53,10 +61,18 @@ class PersonCreate(BaseModel):
     skills: str = ""
     note: str = ""
     weekly_capacity: float | None = None
+    monthly_capacity: float = 30.0
 
     @field_validator("weekly_capacity", mode="before")
     @classmethod
     def _check_days(cls, v):
+        return validate_days(v)
+
+    @field_validator("monthly_capacity", mode="before")
+    @classmethod
+    def _check_monthly(cls, v):
+        if v is None:
+            raise ValueError("核定人天不能为空，请填数字（默认 30）")
         return validate_days(v)
 
 
@@ -66,6 +82,7 @@ class PersonUpdate(BaseModel):
     skills: str | None = None
     note: str | None = None
     weekly_capacity: float | None = None
+    monthly_capacity: float | None = None
 
     @field_validator("name")
     @classmethod
@@ -79,6 +96,13 @@ class PersonUpdate(BaseModel):
     def _check_days(cls, v):
         return validate_days(v)
 
+    @field_validator("monthly_capacity", mode="before")
+    @classmethod
+    def _check_monthly(cls, v):
+        if v is None:
+            raise ValueError("核定人天不能为空，请填数字（默认 30）")
+        return validate_days(v)
+
 
 class PersonOut(ORMModel):
     id: int
@@ -86,6 +110,7 @@ class PersonOut(ORMModel):
     roles: str
     skills: str
     weekly_capacity: float | None
+    monthly_capacity: float
     note: str
     archived: bool
     source_ref: str | None
@@ -428,6 +453,75 @@ class PersonWeekOut(BaseModel):
     assignments: list[AssignmentOut] = []
     unallocated_milestones: list[MilestoneBrief] = []
     status_text: str = ""
+
+
+# ---------- 月度口径（人员页） ----------
+
+
+class MonthProjectUse(BaseModel):
+    """某人某月参与的项目：投入人天与职责角色分开记，职责不产生占用。"""
+
+    project_id: int
+    project_name: str
+    roles: list[str] = []
+    days: float = 0.0
+    has_allocation: bool = False
+    has_assignment: bool = False
+
+
+class MonthWeekOut(BaseModel):
+    """月度视图里的一周：周键是周一，week_end 是周日；周键一律用 ISO 字符串。"""
+
+    week: str
+    week_end: str
+    total_days: float
+    reviewed: bool
+    allocations: list[AllocationOut] = []
+
+
+class MonthPersonDetail(BaseModel):
+    """某人某个自然月的全量视图（只读）。"""
+
+    person_id: int
+    month: str
+    monthly_capacity: float
+    used_days: float
+    over_days: float | None
+    remaining_days: float | None
+    reviewed: bool
+    weeks: list[MonthWeekOut] = []
+    assignments: list[AssignmentOut] = []
+    projects: list[MonthProjectUse] = []
+
+
+class MonthPersonRow(BaseModel):
+    """人员总表的一行：资料字段 + 月度汇总 + 参与项目。
+
+    weekly_capacity 是详情区「资料」标签页唯一缺的那个字段，并进来省一次
+    `api.listPersons()` 往返；周口径允许未知（None），与月度核定人天必填不同。
+    """
+
+    person_id: int
+    name: str
+    skills: str
+    roles: str
+    note: str
+    monthly_capacity: float
+    weekly_capacity: float | None = None
+    used_days: float
+    over_days: float | None
+    remaining_days: float | None
+    reviewed: bool
+    archived: bool
+    projects: list[MonthProjectUse] = []
+
+
+class MonthRosterOut(BaseModel):
+    """某个自然月的人员总表（只读）。weeks 是该月「周一落在该月」的周键升序。"""
+
+    month: str
+    weeks: list[str] = []
+    people: list[MonthPersonRow] = []
 
 
 # ------------------------------------------------------------------ E3 工作台

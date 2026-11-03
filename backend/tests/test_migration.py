@@ -32,12 +32,17 @@ def test_add_person_skills_column_keeps_existing_values():
         assert "skills" in columns
         with engine.connect() as conn:
             row = conn.execute(
-                text("SELECT name, roles, weekly_capacity, skills FROM persons WHERE id = 9001")
+                text(
+                    "SELECT name, roles, weekly_capacity, skills, monthly_capacity"
+                    " FROM persons WHERE id = 9001"
+                )
             ).one()
         assert row.name == "老同事"
         assert row.roles == "统筹管理"
         assert row.weekly_capacity == 4.5
         assert row.skills in (None, "")
+        # 存量人员的核定人天补成 30
+        assert row.monthly_capacity == 30.0
     finally:
         with engine.begin() as conn:
             conn.execute(text("DROP TABLE IF EXISTS persons"))

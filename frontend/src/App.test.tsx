@@ -12,6 +12,7 @@ const getPersonWeek = vi.fn();
 vi.mock("./api", () => ({
   api: {
     listPersons: (...args: unknown[]) => listPersons(...args),
+    listMonthlyRoster: vi.fn().mockResolvedValue({ month: "2026-11", weeks: [], people: [] }),
     listProjects: (...args: unknown[]) => listProjects(...args),
     listAssignments: (...args: unknown[]) => listAssignments(...args),
     getPersonWeek: (...args: unknown[]) => getPersonWeek(...args),
