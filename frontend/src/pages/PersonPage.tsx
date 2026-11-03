@@ -387,10 +387,6 @@ export default function PersonPage() {
   // 职责列表只认当前这个人的：换人后旧数据不闪一下。
   const visibleAssignments = assignmentsFor === selectedId ? assignments : [];
 
-  // aria-selected 的类型是 Booleanish：写 String(...) 会推成 string 编译不过，
-  // 这里显式返回 "true" | "false" 两个字面量，且三个按钮始终带该属性。
-  const tabSelected = (key: DetailTab): "true" | "false" => (tab === key ? "true" : "false");
-
   return (
     <div className="page">
       <div className="page-head">
@@ -527,7 +523,7 @@ export default function PersonPage() {
               type="button"
               role="tab"
               className="tab"
-              aria-selected={tabSelected("profile")}
+              aria-selected={tab === "profile"}
               onClick={() => setTab("profile")}
             >
               资料
@@ -536,7 +532,7 @@ export default function PersonPage() {
               type="button"
               role="tab"
               className="tab"
-              aria-selected={tabSelected("roles")}
+              aria-selected={tab === "roles"}
               onClick={() => setTab("roles")}
             >
               项目职责
@@ -545,7 +541,7 @@ export default function PersonPage() {
               type="button"
               role="tab"
               className="tab"
-              aria-selected={tabSelected("month")}
+              aria-selected={tab === "month"}
               onClick={() => setTab("month")}
             >
               本月分配
