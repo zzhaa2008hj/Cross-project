@@ -28,7 +28,12 @@ def validate_days(value):
         raise ValueError("人天必须是有限数字")
     if days < 0:
         raise ValueError("人天不能为负数")
-    if abs(days * 2 - round(days * 2)) > 1e-9:
+    # days * 2 对极大值会溢出成 inf，round(inf) 抛 OverflowError（→ 500），
+    # 这里先判有限性，把荒谬输入挡在 422 上。
+    scaled = days * 2
+    if not math.isfinite(scaled):
+        raise ValueError("人天数值过大")
+    if abs(scaled - round(scaled)) > 1e-9:
         raise ValueError("人天粒度为 0.5")
     return days
 
@@ -55,9 +60,16 @@ class PersonCreate(BaseModel):
     weekly_capacity: float | None = None
     monthly_capacity: float = 30.0
 
-    @field_validator("weekly_capacity", "monthly_capacity", mode="before")
+    @field_validator("weekly_capacity", mode="before")
     @classmethod
     def _check_days(cls, v):
+        return validate_days(v)
+
+    @field_validator("monthly_capacity", mode="before")
+    @classmethod
+    def _check_monthly(cls, v):
+        if v is None:
+            raise ValueError("核定人天不能为空，请填数字（默认 30）")
         return validate_days(v)
 
 

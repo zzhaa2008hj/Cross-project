@@ -42,3 +42,20 @@ def test_patch_without_field_leaves_value_untouched(client, db):
     r = client.patch(f"/api/persons/{_person(db).id}", json={"note": "只改备注"})
     assert r.status_code == 200
     assert r.json()["monthly_capacity"] == 30.0
+
+
+def test_create_person_explicit_null_monthly_capacity_is_422(client):
+    r = client.post("/api/persons", json={"name": "李四", "monthly_capacity": None})
+    assert r.status_code == 422
+    # 提示要指向「核定人天」，而不是 Pydantic 的通用英文报错
+    assert "核定人天" in r.text
+
+
+def test_create_person_huge_monthly_capacity_is_422(client):
+    r = client.post("/api/persons", json={"name": "李四", "monthly_capacity": 1e308})
+    assert r.status_code == 422
+
+
+def test_patch_huge_monthly_capacity_is_422(client, db):
+    r = client.patch(f"/api/persons/{_person(db).id}", json={"monthly_capacity": 1e308})
+    assert r.status_code == 422
