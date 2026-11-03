@@ -4,6 +4,8 @@ import type {
   HistoryEntry,
   Meta,
   Milestone,
+  MonthPersonDetail,
+  MonthRoster,
   Person,
   PersonWeek,
   Project,
@@ -90,6 +92,12 @@ export const api = {
     request<Person>(`/persons/${id}/archive`, { method: "POST" }),
   restorePerson: (id: number) =>
     request<Person>(`/persons/${id}/restore`, { method: "POST" }),
+
+  // 人员月度视图（只读）
+  listMonthlyRoster: (month: string, includeArchived = false) =>
+    request<MonthRoster>(`/persons/roster?month=${month}&include_archived=${includeArchived}`),
+  getPersonMonth: (personId: number, month: string) =>
+    request<MonthPersonDetail>(`/persons/${personId}/month?month=${month}`),
 
   // E2：职责（不计占用）
   listAssignments: (params: { person_id?: number; project_id?: number } = {}) => {

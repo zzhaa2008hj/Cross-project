@@ -18,6 +18,7 @@ export interface Person {
   roles: string;
   skills: string;
   weekly_capacity: number | null;
+  monthly_capacity: number;
   note: string;
   archived: boolean;
   source_ref: string | null;
@@ -252,4 +253,60 @@ export interface Meta {
   milestone_states: string[];
   buffer_sources: string[];
   allocation_supported: boolean;
+}
+
+// ---------- 月度口径（人员页） ----------
+
+// Task 2 的 MonthProjectUse，参与项目标签与「本月分配」面板共用
+export interface MonthProjectUse {
+  project_id: number;
+  project_name: string;
+  roles: string[];                // 同人同项目可挂多个角色（Assignment 唯一键含 role）
+  days: number;                   // 本月在该项目的人天；只有职责、没有分配时为 0
+  has_allocation: boolean;
+  has_assignment: boolean;
+}
+
+// 注意 weekly_capacity 是本 plan 给 spec §6.4 补的列（理由见 Task 3 Step 4 的注释）
+export interface MonthPersonRow {
+  person_id: number;
+  name: string;
+  skills: string;
+  roles: string;
+  note: string;
+  monthly_capacity: number;
+  weekly_capacity: number | null;   // 周口径，「资料」标签页用
+  used_days: number;
+  over_days: number | null;
+  remaining_days: number | null;
+  reviewed: boolean;
+  archived: boolean;
+  projects: MonthProjectUse[];
+}
+
+export interface MonthRoster {
+  month: string;                 // "2026-11"
+  weeks: string[];               // 该月各周周一，升序
+  people: MonthPersonRow[];
+}
+
+export interface MonthWeek {
+  week: string;
+  week_end: string;
+  total_days: number;
+  reviewed: boolean;
+  allocations: Allocation[];
+}
+
+export interface MonthPersonDetail {
+  person_id: number;
+  month: string;
+  monthly_capacity: number;
+  used_days: number;
+  over_days: number | null;
+  remaining_days: number | null;
+  reviewed: boolean;
+  weeks: MonthWeek[];
+  assignments: Assignment[];
+  projects: MonthProjectUse[];
 }
