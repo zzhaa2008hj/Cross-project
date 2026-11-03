@@ -24,51 +24,30 @@ docker-compose.yml  本机预览编排
 
 ## Docker 预览（推荐）
 
-前置：Docker + Docker Compose；数据目录需已存在（SQLite 不在 Git 内）。
+自用场景：数据全部落在项目目录 `./data`（SQLite、每日备份、导出预览），删容器不影响数据；端口只绑回环，不对外暴露。
 
 ```bash
-# 数据目录（项目登记的 Git 外存储），首次运行需创建
-DATA_DIR=/home/hui/.local/share/paperclip-project-data/52a8eeac-d442-420e-af14-663ffd7af0ee
-mkdir -p "$DATA_DIR/sqlite" "$DATA_DIR/backups"
-
-# 共享网络：compose 中声明为 external，只挂接不重建，因此必须先于 up 准备。
-# 幂等：已存在就直接复用（E1 已建并带标签）；只有缺失时才创建，并打上
-# project/issue/owner/lifecycle 标签。这里绝不删除或重建任何既有网络——正式 QA
-# 容器（pc-52a8eeac-hui206-qa-backend）也连在这个网络上，重建会把它断掉。
-NET=pc-52a8eeac-develop-net
-if docker network inspect "$NET" >/dev/null 2>&1; then
-  echo "网络已存在，直接复用：$NET"
-else
-  docker network create \
-    --label project=52a8eeac-d442-420e-af14-663ffd7af0ee \
-    --label issue=89f32463-500a-4445-a05a-b7d7d16194c8 \
-    --label owner=8769c0b0-acb4-4893-9294-01564a7aef05 \
-    --label lifecycle=preview \
-    "$NET"
-fi
-
-# 构建并启动（容器挂到上面的网络；nginx 通过专属别名 cp-develop-backend 反代）
+mkdir -p data            # 首次运行创建数据目录（.gitignore 已忽略）
 docker compose up -d --build
-
-# 健康检查与访问
 curl http://127.0.0.1:18330/api/health
 # 浏览器打开 http://127.0.0.1:18330/
 ```
 
-停止：`docker compose down`（**不会**删除数据；数据是宿主 bind mount 的 SQLite 文件）。
-重启验证持久化：`docker compose restart` 后项目数据仍在。
+- 停止：`docker compose down`（**不会**删除 `./data`）。
+- **改代码后要带 `--build`**：不带会继续用旧镜像，代码改动不生效。
+- 备份与导出产物也在项目目录：`data/backups`、`data/exports`。
+- vault 以只读方式挂到容器 `/vault`（导入来源），正式写回不在当前版本范围内。
 
-容器/网络命名统一使用 `pc-52a8eeac-` 前缀，并带 `project/issue/owner/lifecycle` 标签：
+容器与镜像命名统一使用 `pc-52a8eeac-` 前缀：
 
 | 资源 | 名称 |
 | --- | --- |
 | compose project | `pc-52a8eeac-develop` |
-| backend 容器 | `pc-52a8eeac-develop-backend` |
-| frontend 容器 | `pc-52a8eeac-develop-frontend` |
-| 网络 | `pc-52a8eeac-develop-net` |
-| 镜像 | `pc-52a8eeac-backend:hui211-e4`、`pc-52a8eeac-frontend:hui211-e4`（固定标签，可复现） |
+| backend 容器 | `pc-52a8eeac-develop-backend-1` |
+| frontend 容器 | `pc-52a8eeac-develop-frontend-1` |
+| 镜像 | `pc-52a8eeac-backend:local`、`pc-52a8eeac-frontend:local` |
 
-无 named volume：SQLite 落在宿主 dataRoot，容器删除不会带走数据。
+无 named volume：SQLite 落在项目目录 `data/`，容器删除不会带走数据。
 
 ## 本地开发（不用 Docker）
 
@@ -170,7 +149,7 @@ E4 交付三件事：**软件状态一致的导出预览**、**每日一致性�
 ### 每日一致性备份
 
 - 服务启动后起一个后台线程，按固定间隔做一次一致性备份（默认 24 小时，可用 `CP_BACKUP_INTERVAL_HOURS` 调整；`CP_BACKUP_ENABLED=0` 整体关闭）。
-- 备份目录：容器内 `/backups`，绑定到宿主 `<数据目录>/backups`（不在 vault 内）。
+- 备份目录：容器内 `/data/backups`，即项目目录 `data/backups`（不在 vault 内）。
 - 每次备份是一个版本目录，含 `crossproject.db`（SQLite 一致性副本）、`export.json` 与 `export.md`。
 - 备份失败只记录日志，不影响服务运行。
 
@@ -185,23 +164,28 @@ curl -s -X POST http://127.0.0.1:18330/api/backup/run
 恢复是离线操作：会先确认应用已停（数据库文件锁），应用仍在运行时会被拒绝。
 
 ```bash
-cd backend
+# 1) 做一次一致性备份（应用运行中也能备份）
+docker compose run --rm --no-deps backend python -m app.backup_cli backup \
+  --db /data/sqlite/crossproject.db \
+  --backup-dir /data/backups
 
-# 1) 做一次一致性备份
-python -m app.backup_cli backup \
-  --db <数据目录>/sqlite/crossproject.db \
-  --backup-dir <数据目录>/backups
+# 2) 恢复前先停应用（否则会被库锁拒绝），恢复完再起
+docker compose stop backend
 
-# 2) 从 JSON 恢复（按当前模型重建库结构并写入数据）
-python -m app.backup_cli restore --type json \
-  --source <数据目录>/backups/<版本>/export.json \
-  --db <数据目录>/sqlite/crossproject.db
+# 3) 从 JSON 恢复（按当前模型重建库结构并写入数据）
+docker compose run --rm --no-deps backend python -m app.backup_cli restore --type json \
+  --source /data/backups/<版本>/export.json \
+  --db /data/sqlite/crossproject.db
 
-# 3) 从 SQLite 副本恢复（原子替换）
-python -m app.backup_cli restore --type sqlite \
-  --source <数据目录>/backups/<版本>/crossproject.db \
-  --db <数据目录>/sqlite/crossproject.db
+# 4) 从 SQLite 副本恢复（原子替换）
+docker compose run --rm --no-deps backend python -m app.backup_cli restore --type sqlite \
+  --source /data/backups/<版本>/crossproject.db \
+  --db /data/sqlite/crossproject.db
+
+docker compose start backend
 ```
+
+`docker compose run --no-deps` 起的是一次性容器，不带 `depends_on`，不会顺手把 backend 拉起来和恢复抢库锁。
 
 恢复流程固定为：**校验 → 生成回滚副本 → 原子替换**。校验不通过则不动原库。
 
@@ -213,7 +197,7 @@ python -m app.backup_cli restore --type sqlite \
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `CP_BACKUP_DIR` | `<数据目录>/backups` | 备份根目录 |
+| `CP_BACKUP_DIR` | `data/backups`（项目目录） | 备份根目录 |
 | `CP_EXPORT_DIR` | `<数据目录>/exports` | 导出预览产物目录 |
 | `CP_BACKUP_ENABLED` | `1` | `0` 关闭每日备份调度 |
 | `CP_BACKUP_INTERVAL_HOURS` | `24` | 备份间隔（小时） |
@@ -236,4 +220,4 @@ python -m app.backup_cli restore --type sqlite \
 - 恢复校验要求候选 `.db` 含当前模型的**全部列**：早于当前版本的备份请走 JSON 恢复路径（按当前模型重建结构）。JSON 恢复还要求导出文件包含当前模型的**全部表**，缺表一律拒绝（避免用不完整的导出清空现库）；**完整但没有任何数据行的导出是合法恢复源**——全新库备份后立即恢复就是这种情形，行数不构成合法性判据。
 - 恢复过程独占库锁：应用仍在运行时恢复会被拒绝，替换期间应用也无法启动。
 - 现库本身已损坏时，回滚副本保存的是原始字节（不是有效 SQLite 快照），恢复仍会继续。
-- 预览环境与正式 QA 容器共用 `pc-52a8eeac-develop-net`，因此 nginx 反代使用专属别名 `cp-develop-backend`；改动 compose 网络时必须保留该别名，否则反代会随机打到其他容器上。该网络声明为 external，compose 只挂接、不重建。
+- 预览环境用 compose 默认网络（`pc-52a8eeac-develop_default`），与正式 QA 容器互不相通；nginx 反代指向服务名 `backend`，该网络内唯一。改服务名时记得同步改 `frontend/nginx.conf`。
