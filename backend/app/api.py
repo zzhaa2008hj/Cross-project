@@ -31,6 +31,7 @@ from .schemas import (
     MilestoneCreate,
     MilestoneOut,
     MilestoneUpdate,
+    MonthPersonDetail,
     PersonCreate,
     PersonOut,
     PersonUpdate,
@@ -47,6 +48,7 @@ from .schemas import (
 )
 from .services import buffer as buffer_service
 from .services import history as history_service
+from .services import monthly as monthly_service
 from .services import reschedule as reschedule_service
 from .services import weekly as weekly_service
 from .services import workbench as workbench_service
@@ -704,6 +706,18 @@ def set_person_week_review(
     row.reviewed = payload.reviewed
     db.commit()
     return weekly_service.person_week(db, person, week)
+
+
+# ------------------------------------------------------------------ 人员月度视图
+
+
+@router.get("/persons/{person_id}/month", response_model=MonthPersonDetail)
+def get_person_month(
+    person_id: int, month: str = Query(...), db: Session = Depends(get_db)
+):
+    """某人某个自然月的全量视图（只读）。"""
+    person = _get_person(db, person_id)
+    return monthly_service.person_month(db, person, month)
 
 
 # ------------------------------------------------------------------ 项目职责

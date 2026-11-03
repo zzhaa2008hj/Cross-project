@@ -452,6 +452,45 @@ class PersonWeekOut(BaseModel):
     status_text: str = ""
 
 
+# ---------- 月度口径（人员页） ----------
+
+
+class MonthProjectUse(BaseModel):
+    """某人某月参与的项目：投入人天与职责角色分开记，职责不产生占用。"""
+
+    project_id: int
+    project_name: str
+    roles: list[str] = []
+    days: float = 0.0
+    has_allocation: bool = False
+    has_assignment: bool = False
+
+
+class MonthWeekOut(BaseModel):
+    """月度视图里的一周：周键是周一，week_end 是周日；周键一律用 ISO 字符串。"""
+
+    week: str
+    week_end: str
+    total_days: float
+    reviewed: bool
+    allocations: list[AllocationOut] = []
+
+
+class MonthPersonDetail(BaseModel):
+    """某人某个自然月的全量视图（只读）。"""
+
+    person_id: int
+    month: str
+    monthly_capacity: float
+    used_days: float
+    over_days: float | None
+    remaining_days: float | None
+    reviewed: bool
+    weeks: list[MonthWeekOut] = []
+    assignments: list[AssignmentOut] = []
+    projects: list[MonthProjectUse] = []
+
+
 # ------------------------------------------------------------------ E3 工作台
 
 
