@@ -447,11 +447,11 @@ export default function PersonPage() {
         </Field>
 
         <div className="toolbar-right">
+          <span className="muted">统计月份：</span>
+          <span className="month-label">{monthLabel(month)}</span>
           <button type="button" onClick={() => setMonth(shiftMonth(month, -1))}>
             ‹
           </button>
-          <span className="muted">统计月份：</span>
-          <span className="month-label">{monthLabel(month)}</span>
           <button type="button" onClick={() => setMonth(shiftMonth(month, 1))}>
             ›
           </button>

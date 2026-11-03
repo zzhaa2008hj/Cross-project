@@ -1,8 +1,8 @@
 import { useSearchParams } from "react-router-dom";
 import { currentMonth } from "./month";
 
-/** 月份参数只认 YYYY-MM；别的写法（手改的 URL、脏链接）一律回退当前月。 */
-const MONTH_RE = /^\d{4}-\d{2}$/;
+/** 月份参数只认 YYYY-MM，且月份必须是 01–12；别的写法（手改的 URL、脏链接）一律回退当前月。 */
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 /**
  * 人员页共用的选月来源：URL 上的 ?month=，缺省为当前月（Asia/Shanghai）。
