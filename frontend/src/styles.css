@@ -572,7 +572,7 @@ button.link,
   color: var(--ink);
 }
 
-/* 三个面板都常驻，未选中的那个靠 hidden 隐藏。 */
+/* 两个面板都常驻，未选中的那个靠 hidden 隐藏。 */
 .tab-panel {
   padding-top: 12px;
 }
@@ -581,15 +581,4 @@ button.link,
   display: none;
 }
 
-.assignment-list {
-  margin: 0 0 12px;
-  padding-left: 18px;
-}
-
-.assignment-list li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 4px 0;
-}
+.month-panel .month-weeks {

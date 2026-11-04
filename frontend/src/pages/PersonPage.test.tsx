@@ -12,14 +12,10 @@ const createPerson = vi.fn();
 const updatePerson = vi.fn();
 const archivePerson = vi.fn();
 const restorePerson = vi.fn();
-const listProjects = vi.fn();
 const listMilestones = vi.fn();
-const listAssignments = vi.fn();
-const createAssignment = vi.fn();
 const createAllocation = vi.fn();
 const updateAllocation = vi.fn();
 const deleteAllocation = vi.fn();
-const deleteAssignment = vi.fn();
 const setWeekReview = vi.fn();
 
 // ---------- 2. vi.mock 工厂 ----------
@@ -31,14 +27,10 @@ vi.mock("../api", () => ({
     updatePerson: (...args: unknown[]) => updatePerson(...args),
     archivePerson: (...args: unknown[]) => archivePerson(...args),
     restorePerson: (...args: unknown[]) => restorePerson(...args),
-    listProjects: (...args: unknown[]) => listProjects(...args),
     listMilestones: (...args: unknown[]) => listMilestones(...args),
-    listAssignments: (...args: unknown[]) => listAssignments(...args),
-    createAssignment: (...args: unknown[]) => createAssignment(...args),
     createAllocation: (...args: unknown[]) => createAllocation(...args),
     updateAllocation: (...args: unknown[]) => updateAllocation(...args),
     deleteAllocation: (...args: unknown[]) => deleteAllocation(...args),
-    deleteAssignment: (...args: unknown[]) => deleteAssignment(...args),
     setWeekReview: (...args: unknown[]) => setWeekReview(...args),
   },
   // 页面 catch 里 instanceof ApiError 靠它；**不能省**，省了整个文件 import 就炸。
@@ -343,17 +335,15 @@ describe("人员页", () => {
     // 再也找不到这三个按钮。
     expect(screen.getByRole("tab", { name: "本月分配" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "资料" }).getAttribute("aria-selected")).toBe("false");
-    expect(screen.getByRole("tab", { name: "项目职责" }).getAttribute("aria-selected")).toBe("false");
     // 默认标签页已经把面板渲染出来了：第一周块的周区间是纯文本节点（别在里面插 <span>）。
     // 注意：面板是挂载后异步拉 getPersonMonth 的，fireEvent.click 不排空微任务队列，
     // 所以这里必须用等待式查询，同步查询看不到还没回来的数据。
     expect(await screen.findByText("11-02 ~ 11-08")).toBeTruthy();
   });
 
-  it("三个标签页可切换", async () => {
+  it("两个标签页可切换", async () => {
     listMonthlyRoster.mockResolvedValue(rosterActive);
     getPersonMonth.mockResolvedValue(detailFixture);
-    listAssignments.mockResolvedValue([]);
     renderPage();
     fireEvent.click(await screen.findByText("傅相杰"));
 
@@ -364,9 +354,6 @@ describe("人员页", () => {
     expect(screen.getByRole("tab", { name: "资料" }).getAttribute("aria-selected")).toBe("true");
     // type="number" 的 ARIA role 是 spinbutton，不是 textbox。
     expect(screen.getByRole("spinbutton", { name: "默认周容量" })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("tab", { name: "项目职责" }));
-    expect(screen.getByRole("button", { name: "添加职责" })).toBeTruthy();
   });
 
   it("未全部核对时汇总条显示「待核对」", async () => {
@@ -407,29 +394,6 @@ describe("人员页", () => {
       rosterActive.people[0].person_id,
       expect.objectContaining({ weekly_capacity: 6 }),
     );
-  });
-
-  it("项目职责标签页添加职责调 createAssignment", async () => {
-    listMonthlyRoster.mockResolvedValue(rosterActive);
-    getPersonMonth.mockResolvedValue(detailFixture);
-    listProjects.mockResolvedValue([{ id: 7, name: "北京仓储", state: "active" }]);
-    listAssignments.mockResolvedValue([]);
-    renderPage();
-    fireEvent.click(await screen.findByText("傅相杰"));
-    fireEvent.click(screen.getByRole("tab", { name: "项目职责" }));
-
-    // <option value={String(p.id)}>：写项目名或数字裸值都对不上
-    fireEvent.change(screen.getByLabelText("职责项目"), { target: { value: "7" } });
-    // 角色必须显式选：不选时提交会被拦下（空值不发请求），断言就对不上了
-    fireEvent.change(screen.getByLabelText("职责角色"), { target: { value: "节点执行" } });
-    // 这个面板没有「保存」按钮——点「添加职责」就直接发请求
-    fireEvent.click(screen.getByRole("button", { name: "添加职责" }));
-
-    expect(createAssignment).toHaveBeenCalledWith({
-      person_id: rosterActive.people[0].person_id,
-      project_id: 7,
-      role: "节点执行",
-    });
   });
 
   it("本月分配标签页加载失败时显示错误信息", async () => {

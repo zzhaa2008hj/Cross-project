@@ -7,19 +7,13 @@ import PersonMonthPanel from "../components/PersonMonthPanel";
 import { parseCapacityDays, parseDays } from "../components/WeekPanel";
 import { currentMonth, monthLabel, shiftMonth } from "../month";
 import { useMonthParam } from "../useMonthParam";
-import type { Assignment, MonthPersonRow, MonthRoster, Project } from "../types";
+import type { MonthPersonRow, MonthRoster } from "../types";
 
 /** 弹窗状态：新增没有具体人，编辑带着那一行 roster 数据。 */
 type DialogState = { mode: "create" } | { mode: "edit"; person: MonthPersonRow } | null;
 
-/** 详情区的三个标签页。默认停在「本月分配」。 */
-type DetailTab = "profile" | "roles" | "month";
-
-/**
- * 职责角色：必须与 backend/app/config.py 的 ASSIGNMENT_ROLES 逐字一致，
- * 后端按它校验，不在名单里直接 422。
- */
-const ASSIGNMENT_ROLES = ["项目负责人", "业务对接", "节点执行", "统筹管理"];
+/** 详情区的两个标签页。默认停在「本月分配」。 */
+type DetailTab = "profile" | "month";
 
 /**
  * 汇总条文案：一个模板字面量文本节点，getByText 才能精确匹配整串。
@@ -192,91 +186,6 @@ function ProfilePanel({ row, onSaved }: ProfilePanelProps) {
   );
 }
 
-interface RolesPanelProps {
-  projects: Project[];
-  assignments: Assignment[];
-  error: string | null;
-  onCreate: (projectId: number, role: string) => void;
-  onDelete: (assignmentId: number) => void;
-}
-
-/**
- * 「项目职责」标签页：只管职责，不计占用。
- * 「添加职责」直接发请求，面板里没有「保存」按钮。
- */
-function RolesPanel({ projects, assignments, error, onCreate, onDelete }: RolesPanelProps) {
-  const [projectId, setProjectId] = useState("");
-  const [role, setRole] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
-
-  function submit() {
-    if (!projectId) {
-      setFormError("请选择项目");
-      return;
-    }
-    if (!role) {
-      setFormError("请选择职责角色");
-      return;
-    }
-    setFormError(null);
-    onCreate(Number(projectId), role);
-  }
-
-  return (
-    <div>
-      <ErrorBanner error={error} />
-      <ErrorBanner error={formError} />
-
-      {assignments.length === 0 ? (
-        <p className="muted empty">还没有项目职责</p>
-      ) : (
-        <ul className="assignment-list">
-          {assignments.map((a) => (
-            <li key={a.id}>
-              <span>{`${a.project_name ?? `#${a.project_id}`} · ${a.role}`}</span>
-              <button type="button" className="ghost" onClick={() => onDelete(a.id)}>
-                删除
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className="form-grid">
-        <Field label="职责项目">
-          <select
-            aria-label="职责项目"
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-          >
-            <option value="">请选择</option>
-            {projects.map((p) => (
-              <option key={p.id} value={String(p.id)}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="职责角色">
-          <select aria-label="职责角色" value={role} onChange={(e) => setRole(e.target.value)}>
-            <option value="">请选择</option>
-            {ASSIGNMENT_ROLES.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-      <div className="form-actions">
-        <button type="button" onClick={submit}>
-          添加职责
-        </button>
-      </div>
-    </div>
-  );
-}
-
 /**
  * 人员页上半屏：月度人员表。
  * 月份来自 ?month=（useMonthParam），已禁用的人默认不显示（后端按参数过滤），
@@ -290,13 +199,8 @@ export default function PersonPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
 
-  // 详情区：汇总条 + 三个标签页，默认停在「本月分配」。
+  // 详情区：汇总条 + 两个标签页，默认停在「本月分配」。
   const [tab, setTab] = useState<DetailTab>("month");
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [assignments, setAssignments] = useState<Assignment[]>([]);
-  // 已加载过职责的人员 id：切标签页不重复拉，换人才重拉。
-  const [assignmentsFor, setAssignmentsFor] = useState<number | null>(null);
-  const [rolesError, setRolesError] = useState<string | null>(null);
 
   const [searchParams] = useSearchParams();
   const preselected = searchParams.get("person");
@@ -326,22 +230,6 @@ export default function PersonPage() {
     void load();
   }, [load]);
 
-  // 项目下拉给「项目职责」标签页用：进页面就拉一次，切标签页不再重拉。
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const rows = (await api.listProjects()) ?? [];
-        if (!cancelled) setProjects(rows);
-      } catch {
-        // 忽略：项目列表为空时职责下拉选不了项目，不影响其他标签页。
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   // 从工作台跳转过来时按 URL 指定的人员选中。
   useEffect(() => {
     if (!roster || !preselected) return;
@@ -364,65 +252,13 @@ export default function PersonPage() {
     }
   }
 
-  /** 写操作成功后刷新自己的数据：roster 换最新，职责列表也重拉。 */
+  /** 写操作成功后刷新自己的数据：roster 换最新。 */
   const reload = useCallback(() => {
     void loadRef.current();
   }, []);
 
-  const loadAssignments = useCallback(async (personId: number) => {
-    const rows = (await api.listAssignments({ person_id: personId })) ?? [];
-    setAssignments(rows);
-    setAssignmentsFor(personId);
-  }, []);
-
-  // 职责列表只在「项目职责」标签页首次打开时拉一次；换人再重拉。
-  useEffect(() => {
-    if (tab !== "roles" || selectedId === null) return;
-    if (assignmentsFor === selectedId) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const rows = (await api.listAssignments({ person_id: selectedId })) ?? [];
-        if (cancelled) return;
-        setAssignments(rows);
-        setAssignmentsFor(selectedId);
-      } catch (e) {
-        if (!cancelled) setRolesError(errorMessage(e));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [tab, selectedId, assignmentsFor]);
-
-  async function addAssignment(projectId: number, role: string) {
-    if (selectedId === null) return;
-    setRolesError(null);
-    try {
-      await api.createAssignment({ person_id: selectedId, project_id: projectId, role });
-      reload();
-      await loadAssignments(selectedId);
-    } catch (e) {
-      setRolesError(errorMessage(e));
-    }
-  }
-
-  async function removeAssignment(assignmentId: number) {
-    if (selectedId === null) return;
-    setRolesError(null);
-    try {
-      await api.deleteAssignment(assignmentId);
-      reload();
-      await loadAssignments(selectedId);
-    } catch (e) {
-      setRolesError(errorMessage(e));
-    }
-  }
-
   const rows = roster?.people ?? [];
   const selectedRow = rows.find((r) => r.person_id === selectedId) ?? null;
-  // 职责列表只认当前这个人的：换人后旧数据不闪一下。
-  const visibleAssignments = assignmentsFor === selectedId ? assignments : [];
 
   return (
     <div className="page">
@@ -569,15 +405,6 @@ export default function PersonPage() {
               type="button"
               role="tab"
               className="tab"
-              aria-selected={tab === "roles"}
-              onClick={() => setTab("roles")}
-            >
-              项目职责
-            </button>
-            <button
-              type="button"
-              role="tab"
-              className="tab"
               aria-selected={tab === "month"}
               onClick={() => setTab("month")}
             >
@@ -585,18 +412,9 @@ export default function PersonPage() {
             </button>
           </div>
 
-          {/* 三个面板都常驻：切标签页只改 state，不重新拉数据，也不丢面板内部状态。 */}
+          {/* 两个面板都常驻：切标签页只改 state，不重新拉数据，也不丢面板内部状态。 */}
           <div className="tab-panel" role="tabpanel" hidden={tab !== "profile"}>
             <ProfilePanel key={selectedRow.person_id} row={selectedRow} onSaved={reload} />
-          </div>
-          <div className="tab-panel" role="tabpanel" hidden={tab !== "roles"}>
-            <RolesPanel
-              projects={projects}
-              assignments={visibleAssignments}
-              error={rolesError}
-              onCreate={(projectId, role) => void addAssignment(projectId, role)}
-              onDelete={(assignmentId) => void removeAssignment(assignmentId)}
-            />
           </div>
           <div className="tab-panel" role="tabpanel" hidden={tab !== "month"}>
             <PersonMonthPanel

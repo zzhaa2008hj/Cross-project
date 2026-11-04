@@ -107,16 +107,6 @@ export const api = {
     const qs = q.toString();
     return request<Assignment[]>(`/assignments${qs ? `?${qs}` : ""}`);
   },
-  createAssignment: (payload: {
-    person_id: number;
-    project_id: number;
-    role: string;
-    note?: string;
-  }) => request<Assignment>("/assignments", { method: "POST", body: body(payload) }),
-  updateAssignment: (id: number, payload: { role?: string; note?: string }) =>
-    request<Assignment>(`/assignments/${id}`, { method: "PATCH", body: body(payload) }),
-  deleteAssignment: (id: number) =>
-    request<{ deleted: boolean }>(`/assignments/${id}`, { method: "DELETE" }),
 
   // E2：周投入分配（唯一占用来源）
   listAllocations: (
